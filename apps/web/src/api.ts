@@ -69,3 +69,19 @@ export type Chore = {
 export type CompleteResult =
   | { outcome: "completed" | "already_completed"; completion: Completion; nextDue: Chore["nextDue"] }
   | { outcome: "nothing_due"; nextDue: Chore["nextDue"] };
+
+export type Tag = {
+  id: string;
+  /** The permanent path written onto the physical Tag (ADR 0001). */
+  path: string;
+  chore: { id: string; name: string } | null;
+};
+
+export type ChoreRef = { id: string; name: string };
+
+/** POST /api/scan/:tagId. Mirrors ScanOutcome in apps/api/src/scan/resolver.ts. */
+export type ScanOutcome =
+  | { outcome: "completed" | "already_completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"] }
+  | { outcome: "nothing_due"; chore: ChoreRef; nextDue: Chore["nextDue"]; earlyCompletionOffered: boolean }
+  | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
+  | { outcome: "not_a_member" };

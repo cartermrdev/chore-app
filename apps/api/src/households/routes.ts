@@ -10,8 +10,9 @@ import { isValidTimeZone } from "./seed";
  * instants; Occurrences created afterwards are planned in the new zone.
  */
 export const householdRoutes = new Hono<AppEnv>()
-  .use(requireSession, requireMembership)
-  .patch("/", requireAdmin, async (c) => {
+  // Middleware per route, not .use(): this router is mounted at the Household's
+  // root, so .use() would also run on /chores, /tags, etc.
+  .patch("/", requireSession, requireMembership, requireAdmin, async (c) => {
     const { db } = c.var.deps;
     const body = await c.req.json().catch(() => ({}));
     const timeZone = body?.timeZone;

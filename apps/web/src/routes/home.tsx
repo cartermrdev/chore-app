@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, ApiError, type Me } from "../api";
 import { ChoreList } from "./chores";
+import { TagManager } from "./tags";
 
 export function HomePage() {
   const me = useQuery({
@@ -23,6 +24,7 @@ export function HomePage() {
           <p>Time zone: {m.household.timeZone}</p>
           {m.role === "admin" && <HouseholdSettings householdId={m.household.id} timeZone={m.household.timeZone} />}
           <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
+          {m.role === "admin" && <TagManager householdId={m.household.id} />}
         </article>
       ))}
     </>

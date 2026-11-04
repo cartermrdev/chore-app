@@ -6,6 +6,8 @@ import { testRoutes } from "./testing/routes";
 import { householdRoutes, meRoutes } from "./households/routes";
 import type { CurrentMembership } from "./households/membership";
 import { choreRoutes } from "./chores/routes";
+import { tagRoutes } from "./tags/routes";
+import { scanRoutes } from "./scan/routes";
 
 /** Everything the app needs from the outside world. Tests inject their own. */
 export type Deps = {
@@ -38,6 +40,8 @@ export function createApp(deps: Deps) {
   api.route("/me", meRoutes);
   api.route("/households/:householdId/chores", choreRoutes);
   api.route("/households/:householdId", householdRoutes);
+  api.route("/households/:householdId/tags", tagRoutes);
+  api.route("/scan", scanRoutes);
   if (deps.config.testAuth) api.route("/test", testRoutes);
 
   app.route("/api", api);
