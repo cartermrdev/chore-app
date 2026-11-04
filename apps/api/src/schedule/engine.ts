@@ -6,19 +6,32 @@
  * it returns the Occurrences that should exist up to a horizon. It owns all
  * calendar maths (time zones, DST, month ends).
  *
- * Supported so far: One-off, and Fixed "every N days".
+ * Supported so far: One-off, and Fixed "every N days", "selected weekdays every
+ * N weeks" and "monthly on day X" (clamped to the last day of short months).
  *
- * Adding a Fixed kind (e.g. weekdays every N weeks, monthly day X):
+ * Adding a Fixed kind:
  *   1. add a member to `FixedRule`,
  *   2. add a case to `fixedDueDates` yielding its due dates in order,
  *   3. add a case to `parseFixedRule` so the API accepts it.
  * Windows, Due Times, horizons and `after` are handled generically.
  */
-import { addDays, compareDates, daysBetween, isLocalDate, localDateOf, startOfLocalDay, type LocalDate } from "./calendar";
+import { addDays, compareDates, dayOfMonth, daysBetween, isLocalDate, localDateOf, mondayOf, startOfLocalDay, type LocalDate } from "./calendar";
 
 export type { LocalDate } from "./calendar";
 
-export type FixedRule = { type: "every_n_days"; n: number };
+/** ISO weekday: 1 = Monday … 7 = Sunday. */
+export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type FixedRule =
+  | { type: "every_n_days"; n: number }
+  /**
+   * On the selected weekdays of every Nth week. Weeks run Monday to Sunday,
+   * and the week containing startDate is the first week (so "fortnightly"
+   * is anchored on startDate).
+   */
+  | { type: "weekdays"; weekdays: Weekday[]; n: number }
+  /** Every month on this day (1–31); a day the month lacks falls on its last day. */
+  | { type: "monthly"; day: number };
 
 export type FixedSchedule = {
   kind: "fixed";
@@ -120,6 +133,31 @@ function* fixedDueDates(schedule: FixedSchedule, from: LocalDate): Generator<Loc
         date = addDays(date, rule.n);
       }
     }
+    case "weekdays": {
+      const firstWeek = mondayOf(schedule.startDate);
+      // Start at the beginning of the first matching week on or before `start`.
+      const weeksIn = Math.floor(daysBetween(firstWeek, mondayOf(start)) / 7);
+      let week = addDays(firstWeek, Math.floor(weeksIn / rule.n) * rule.n * 7);
+      const days = [...rule.weekdays].sort((a, b) => a - b);
+      while (true) {
+        for (const wd of days) {
+          const date = addDays(week, wd - 1);
+          if (compareDates(date, start) >= 0) yield date;
+        }
+        week = addDays(week, rule.n * 7);
+      }
+    }
+    case "monthly": {
+      let [year, month] = start.split("-").map(Number) as [number, number];
+      while (true) {
+        const date = dayOfMonth(year, month, rule.day);
+        if (compareDates(date, start) >= 0) yield date;
+        if (++month > 12) {
+          month = 1;
+          year++;
+        }
+      }
+    }
   }
 }
 
@@ -153,6 +191,22 @@ function parseFixedRule(raw: any): FixedRule | string {
     case "every_n_days":
       if (!Number.isInteger(raw.n) || raw.n < 1 || raw.n > 366) return "n must be an integer from 1 to 366";
       return { type: "every_n_days", n: raw.n };
+    case "weekdays": {
+      if (!Number.isInteger(raw.n) || raw.n < 1 || raw.n > 52) return "n must be an integer from 1 to 52";
+      const days = raw.weekdays;
+      if (
+        !Array.isArray(days) ||
+        days.length === 0 ||
+        !days.every((d) => Number.isInteger(d) && d >= 1 && d <= 7) ||
+        new Set(days).size !== days.length
+      ) {
+        return "weekdays must be distinct ISO weekdays from 1 (Monday) to 7 (Sunday)";
+      }
+      return { type: "weekdays", weekdays: [...days].sort((a, b) => a - b) as Weekday[], n: raw.n };
+    }
+    case "monthly":
+      if (!Number.isInteger(raw.day) || raw.day < 1 || raw.day > 31) return "day must be an integer from 1 to 31";
+      return { type: "monthly", day: raw.day };
     default:
       return "unknown fixed rule type";
   }

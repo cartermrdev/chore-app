@@ -4,9 +4,13 @@
  * Writes the Occurrences the Schedule engine says should exist by `now`
  * (every Occurrence whose Window has opened), and moves Fixed Occurrences
  * whose Window has closed without a Completion to Missed. Idempotent and
- * safe to run concurrently: it only ever adds rows the unique index allows,
- * and only plans Occurrences after the latest stored one, so Schedule edits
- * affect only Occurrences not yet created.
+ * safe to run concurrently: it only ever adds rows the unique index allows.
+ *
+ * Schedule edits: the Chore's schedule is simply replaced, and planning
+ * resumes where the latest stored Occurrence's Window ends (`resumeAfter`).
+ * So an edit affects only Occurrences not yet created: stored ones (including
+ * the current Open one and its Window) never change, and the new Schedule
+ * cannot open an Occurrence inside the current Window.
  *
  * Runs lazily on reads and completions (`materialise`). A periodic sweep can
  * call the same function.
@@ -27,8 +31,12 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
   const choreId = scope.choreId ?? null;
 
   const chores = await db`
-    SELECT c.id, c.schedule, (SELECT max(o.window_start) FROM occurrences o WHERE o.chore_id = c.id) AS last_start
+    SELECT c.id, c.schedule, last.window_start AS last_start, last.window_end AS last_end
     FROM chores c
+    LEFT JOIN LATERAL (
+      SELECT o.window_start, o.window_end FROM occurrences o
+      WHERE o.chore_id = c.id ORDER BY o.window_start DESC LIMIT 1
+    ) last ON true
     WHERE c.household_id = ${householdId} AND c.archived_at IS NULL
       AND (${choreId}::uuid IS NULL OR c.id = ${choreId}::uuid)`;
 
@@ -38,7 +46,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       timeZone,
       pauses: [],
       lastCompletionAt: null,
-      after: chore.last_start ?? null,
+      after: resumeAfter(chore.last_start ? { windowStart: chore.last_start, windowEnd: chore.last_end } : null),
       horizon: now,
     });
     if (planned.length === 0) continue;
@@ -64,18 +72,33 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       AND (${choreId}::uuid IS NULL OR chore_id = ${choreId}::uuid)`;
 }
 
+export type StoredWindow = { windowStart: Date; windowEnd: Date | null };
+
+/**
+ * The `after` to plan new Occurrences from, given the latest stored one:
+ * only Occurrences whose Window opens at or after its Window end (or, for a
+ * One-off with no Window end, after its Window start). With an unedited
+ * Schedule that is exactly the next planned Occurrence; after an edit it
+ * keeps the new Schedule out of the current Window.
+ */
+export function resumeAfter(latest: StoredWindow | null): Date | null {
+  if (!latest) return null;
+  if (!latest.windowEnd) return latest.windowStart;
+  return new Date(latest.windowEnd.getTime() - 1);
+}
+
 export type NextDue = { dueDate: string; dueTime: Date };
 
 /**
  * When a Chore is next due: its earliest Open Occurrence if it has one,
  * otherwise the next Occurrence the Schedule will create after the latest
- * stored one (not stored yet, so Schedule edits still apply to it).
+ * stored one (`latest`) (not stored yet, so Schedule edits still apply to it).
  */
 export function deriveNextDue(
   schedule: Schedule,
   timeZone: string,
   firstOpen: { dueDate: string; dueTime: Date } | null,
-  lastWindowStart: Date | null,
+  latest: StoredWindow | null,
 ): NextDue | null {
   if (firstOpen) return { dueDate: firstOpen.dueDate, dueTime: firstOpen.dueTime };
   const [next] = occurrencesUpTo({
@@ -83,7 +106,7 @@ export function deriveNextDue(
     timeZone,
     pauses: [],
     lastCompletionAt: null,
-    after: lastWindowStart,
+    after: resumeAfter(latest),
     horizon: new Date("9999-12-31T00:00:00Z"),
     limit: 1,
   });
