@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type Me } from "../api";
 import { ChoreList } from "./chores";
+import { TagManager } from "./tags";
 
 export function HomePage() {
   const me = useQuery({
@@ -20,6 +21,7 @@ export function HomePage() {
         <article key={m.household.id}>
           <h1>{m.household.name}</h1>
           <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
+          {m.role === "admin" && <TagManager householdId={m.household.id} />}
         </article>
       ))}
     </>

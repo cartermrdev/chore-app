@@ -1,8 +1,8 @@
 import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
 import { HomePage } from "./routes/home";
+import { ScanPage } from "./routes/scan";
 
-// Code-based routes. Add new routes here (e.g. the /nfc/$tagId scan page,
-// whose path is a permanent contract: ADR 0001).
+// Code-based routes. Add new routes here.
 const rootRoute = createRootRoute({
   component: () => (
     <main>
@@ -17,7 +17,17 @@ const homeRoute = createRoute({
   component: HomePage,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute]);
+// The Tag URL. Its path is a permanent contract (ADR 0001): never change it.
+const scanRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/nfc/$tagId",
+  component: function Scan() {
+    const { tagId } = scanRoute.useParams();
+    return <ScanPage key={tagId} tagId={tagId} />;
+  },
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, scanRoute]);
 
 export const router = createRouter({ routeTree });
 

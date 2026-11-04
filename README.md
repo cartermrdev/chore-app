@@ -41,6 +41,8 @@ apps/api            Bun + Hono + PostgreSQL backend
   src/occurrences/    Occurrence materialiser (lazy, idempotent; marks Missed)
   src/chores/         Chore routes and read model (current Occurrence, next due)
   src/completions/    Completion service: the single path that creates a Completion
+  src/tags/           Tag service and Admin routes (random ids, link/re-point to a Chore)
+  src/scan/           Scan resolver and POST /api/scan/:tagId (the /nfc/{tagId} page's request)
   src/testing/        test-only /api/test/* endpoints
   scripts/            seed and migrate CLIs
   test/               API test harness and API tests (*.test.ts)
