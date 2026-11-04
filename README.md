@@ -36,7 +36,11 @@ apps/api            Bun + Hono + PostgreSQL backend
   src/db/             Bun SQL client, migration runner, migrations/NNNN_name.sql
   src/auth/           sessions (90 days, sliding) and requireSession middleware
   src/households/     seed, GET /api/me
-  src/schedule/       Schedule engine (pure, no I/O) and its table-driven tests
+  src/households/membership.ts  requireMembership / requireAdmin for /households/:householdId routes
+  src/schedule/       Schedule engine (pure, no I/O), calendar maths, table-driven tests
+  src/occurrences/    Occurrence materialiser (lazy, idempotent; marks Missed)
+  src/chores/         Chore routes and read model (current Occurrence, next due)
+  src/completions/    Completion service: the single path that creates a Completion
   src/testing/        test-only /api/test/* endpoints
   scripts/            seed and migrate CLIs
   test/               API test harness and API tests (*.test.ts)

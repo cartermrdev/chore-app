@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type Me } from "../api";
+import { ChoreList } from "./chores";
 
 export function HomePage() {
   const me = useQuery({
@@ -14,10 +15,13 @@ export function HomePage() {
 
   return (
     <>
-      {me.data.memberships.map((m) => (
-        <h1 key={m.household.id}>{m.household.name}</h1>
-      ))}
       <p>Signed in as {me.data.person.displayName}</p>
+      {me.data.memberships.map((m) => (
+        <article key={m.household.id}>
+          <h1>{m.household.name}</h1>
+          <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
+        </article>
+      ))}
     </>
   );
 }

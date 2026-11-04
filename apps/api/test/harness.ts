@@ -30,6 +30,8 @@ export type TestApp = {
   db: Db;
   clock: TestClock;
   seed(input?: Partial<SeedInput>): Promise<SeedResult>;
+  /** Adds a Person with a current Membership (setup only: there is no Invite API yet). */
+  addPerson(householdId: string, opts?: { displayName?: string; role?: "admin" | "standard" }): Promise<{ id: string; displayName: string }>;
   /** Signs in through the test-only sign-in path and returns a client carrying the session. */
   signIn(personId: string): Promise<TestClient>;
   anonymous(): TestClient;
@@ -88,6 +90,17 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
         ...input,
       });
     },
+    async addPerson(householdId, opts = {}) {
+      seq += 1;
+      const now = clock.now();
+      const displayName = opts.displayName ?? `Person ${seq}`;
+      const [person] = await db`
+        INSERT INTO persons (display_name, created_at) VALUES (${displayName}, ${now}) RETURNING id`;
+      await db`
+        INSERT INTO memberships (household_id, person_id, role, created_at)
+        VALUES (${householdId}, ${person.id}, ${opts.role ?? "standard"}, ${now})`;
+      return { id: person.id, displayName };
+    },
     async signIn(personId) {
       const client = makeClient(app);
       const res = await client.post("/api/test/sign-in", { personId });
@@ -123,6 +136,7 @@ export function useTestApp(opts: TestAppOptions = {}): TestApp {
     get db() { return get().db; },
     get clock() { return get().clock; },
     seed: (i) => get().seed(i),
+    addPerson: (h, o) => get().addPerson(h, o),
     signIn: (id) => get().signIn(id),
     anonymous: () => get().anonymous(),
     close: () => get().close(),

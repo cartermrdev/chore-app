@@ -1,0 +1,43 @@
+import type { MiddlewareHandler } from "hono";
+import type { AppEnv } from "../app";
+import type { Db } from "../db/client";
+
+export type Role = "admin" | "standard";
+
+export type CurrentMembership = {
+  householdId: string;
+  personId: string;
+  role: Role;
+  timeZone: string;
+};
+
+/** The Person's current Membership in the Household, or null (also for malformed ids). */
+export async function findMembership(db: Db, householdId: string, personId: string): Promise<CurrentMembership | null> {
+  const rows = await db`
+    SELECT m.role, h.time_zone
+    FROM memberships m JOIN households h ON h.id = m.household_id
+    WHERE m.household_id = ${householdId}::uuid AND m.person_id = ${personId} AND m.ended_at IS NULL`.catch(
+    () => [],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return { householdId, personId, role: row.role, timeZone: row.time_zone };
+}
+
+/**
+ * For routes under /households/:householdId. Requires requireSession first.
+ * Non-members get 404 so a Household reveals nothing to outsiders.
+ */
+export const requireMembership: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const householdId = c.req.param("householdId");
+  if (!householdId) return c.json({ error: "not_found" }, 404);
+  const membership = await findMembership(c.var.deps.db, householdId, c.var.personId);
+  if (!membership) return c.json({ error: "not_found" }, 404);
+  c.set("membership", membership);
+  await next();
+};
+
+export const requireAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.var.membership.role !== "admin") return c.json({ error: "forbidden" }, 403);
+  await next();
+};

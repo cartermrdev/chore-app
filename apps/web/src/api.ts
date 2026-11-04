@@ -28,3 +28,30 @@ export type Me = {
     household: { id: string; name: string; timeZone: string };
   }[];
 };
+
+export type OccurrenceStatus = "open" | "completed" | "missed" | "skipped";
+
+export type Completion = {
+  id: string;
+  completer: { id: string; displayName: string };
+  recorder: { id: string; displayName: string };
+  method: "manual" | "nfc";
+  completedAt: string;
+  late: boolean;
+};
+
+export type Chore = {
+  id: string;
+  name: string;
+  currentOccurrence: {
+    id: string;
+    dueDate: string;
+    status: OccurrenceStatus;
+    completion: Completion | null;
+  } | null;
+  nextDue: { dueDate: string; dueTime: string } | null;
+};
+
+export type CompleteResult =
+  | { outcome: "completed" | "already_completed"; completion: Completion; nextDue: Chore["nextDue"] }
+  | { outcome: "nothing_due"; nextDue: Chore["nextDue"] };

@@ -4,6 +4,8 @@ import { assertValidConfig, type Config } from "./config";
 import type { Db } from "./db/client";
 import { testRoutes } from "./testing/routes";
 import { meRoutes } from "./households/routes";
+import type { CurrentMembership } from "./households/membership";
+import { choreRoutes } from "./chores/routes";
 
 /** Everything the app needs from the outside world. Tests inject their own. */
 export type Deps = {
@@ -17,6 +19,8 @@ export type AppEnv = {
     deps: Deps;
     /** Set by requireSession. */
     personId: string;
+    /** Set by requireMembership on /households/:householdId routes. */
+    membership: CurrentMembership;
   };
 };
 
@@ -32,6 +36,7 @@ export function createApp(deps: Deps) {
   const api = new Hono<AppEnv>();
   api.get("/health", (c) => c.json({ ok: true }));
   api.route("/me", meRoutes);
+  api.route("/households/:householdId/chores", choreRoutes);
   if (deps.config.testAuth) api.route("/test", testRoutes);
 
   app.route("/api", api);
