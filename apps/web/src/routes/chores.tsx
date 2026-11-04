@@ -9,6 +9,7 @@ import {
   scheduleFromDraft,
   type ScheduleDraft,
 } from "./schedule-fields";
+import { CompleterPicker, ExcuseForm, VoidButton } from "./corrections";
 
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
 
@@ -37,12 +38,14 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
   const queryClient = useQueryClient();
   // One key per press of the button, reused if the request is retried.
   const key = useRef<string | null>(null);
+  // Admins may credit someone else ("" = themselves); they are then the Recorder.
+  const [completerId, setCompleterId] = useState("");
   const complete = useMutation({
     mutationFn: () => {
       key.current ??= crypto.randomUUID();
       return api<CompleteResult>(`/households/${householdId}/chores/${chore.id}/complete`, {
         method: "POST",
-        body: JSON.stringify({ idempotencyKey: key.current }),
+        body: JSON.stringify({ idempotencyKey: key.current, ...(completerId ? { completerId } : {}) }),
       });
     },
     retry: 2,
@@ -57,21 +60,38 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
   return (
     <li>
       <strong>{chore.name}</strong> <span>({describeSchedule(chore.schedule)})</span>{" "}
-      {occ ? <span>{STATUS_LABEL[occ.status]}</span> : <span>Not due yet</span>}
+      {occ ? (
+        <span>
+          {STATUS_LABEL[occ.status]}
+          {occ.excuse ? ` · Excused: ${occ.excuse.note}` : ""}
+        </span>
+      ) : (
+        <span>Not due yet</span>
+      )}
       {occ?.completion && (
         <span>
           {" "}
           · Completed by {occ.completion.completer.displayName}
+          {occ.completion.recorder.id !== occ.completion.completer.id
+            ? ` (recorded by ${occ.completion.recorder.displayName})`
+            : ""}
           {occ.completion.late ? " (Late)" : ""}
         </span>
       )}
       {chore.nextDue && <span> · Next due {chore.nextDue.dueDate}</span>}{" "}
+      {occ?.status === "open" && isAdmin && (
+        <CompleterPicker householdId={householdId} value={completerId} onChange={setCompleterId} />
+      )}{" "}
       {occ?.status === "open" && (
         <button type="button" disabled={complete.isPending} onClick={() => complete.mutate()}>
           Complete
         </button>
       )}
       {complete.error && <span role="alert"> Could not complete. Try again.</span>}
+      {isAdmin && occ?.completion && <VoidButton householdId={householdId} completionId={occ.completion.id} />}
+      {isAdmin && (occ?.status === "open" || occ?.status === "missed") && (
+        <ExcuseForm householdId={householdId} occurrenceId={occ.id} />
+      )}
       {isAdmin && !editing && (
         <button type="button" onClick={() => setEditing(true)}>
           Edit

@@ -40,6 +40,15 @@ export type Completion = {
   late: boolean;
 };
 
+/** A Completion withdrawn by Undo or Void; it stays in history. */
+export type VoidedCompletion = Completion & { voidedAt: string; voidedBy: { id: string; displayName: string } };
+
+/** Set when an Admin Excused the Occurrence (status Skipped). */
+export type Excuse = { note: string; excusedAt: string; excusedBy: { id: string; displayName: string } };
+
+/** GET /households/:id/persons */
+export type HouseholdPerson = { id: string; displayName: string; role: "admin" | "standard" };
+
 /** ISO weekday: 1 = Monday … 7 = Sunday. */
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
@@ -62,6 +71,8 @@ export type Chore = {
     dueDate: string;
     status: OccurrenceStatus;
     completion: Completion | null;
+    voidedCompletions: VoidedCompletion[];
+    excuse: Excuse | null;
   } | null;
   nextDue: { dueDate: string; dueTime: string } | null;
 };

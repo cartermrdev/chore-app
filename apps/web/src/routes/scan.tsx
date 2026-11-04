@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type Chore, type ScanOutcome } from "../api";
+import { UndoButton } from "./corrections";
 
 /** Automatic retries after the first attempt: 1 s, 3 s, 6 s (about 10 s), then a Retry button. */
 const RETRY_DELAYS_MS = [1000, 3000, 6000];
@@ -59,18 +60,8 @@ export function ScanPage({ tagId }: { tagId: string }) {
 
 function OutcomeScreen({ result }: { result: ScanOutcome }) {
   switch (result.outcome) {
-    case "completed": {
-      const c = result.completion;
-      return (
-        <Screen title={result.chore.name} mark="✓">
-          <p>Credited to {c.completer.displayName}</p>
-          <p>
-            {c.late ? "Late" : "On time"}
-            <NextDue nextDue={result.nextDue} prefix=" · " />
-          </p>
-        </Screen>
-      );
-    }
+    case "completed":
+      return <CompletedScreen result={result} />;
     case "already_completed": {
       const c = result.completion;
       return (
@@ -106,6 +97,29 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
         </Screen>
       );
   }
+}
+
+/** The confirmation, with Undo for the Completer for 5 minutes. */
+function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "completed" | "already_completed" }> }) {
+  const [undone, setUndone] = useState(false);
+  const c = result.completion;
+  if (undone) {
+    return (
+      <Screen title={result.chore.name}>
+        <p>Undone. Nothing is recorded for this scan.</p>
+      </Screen>
+    );
+  }
+  return (
+    <Screen title={result.chore.name} mark="✓">
+      <p>Credited to {c.completer.displayName}</p>
+      <p>
+        {c.late ? "Late" : "On time"}
+        <NextDue nextDue={result.nextDue} prefix=" · " />
+      </p>
+      <UndoButton completionId={c.id} completedAt={c.completedAt} onUndone={() => setUndone(true)} />
+    </Screen>
+  );
 }
 
 function Screen({ title, mark, children }: { title: string; mark?: string; children?: React.ReactNode }) {
