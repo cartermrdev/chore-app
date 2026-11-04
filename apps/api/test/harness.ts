@@ -15,6 +15,8 @@ import type { Config } from "../src/config";
 import { connect, type Db } from "../src/db/client";
 import { seedHousehold, type SeedInput, type SeedResult } from "../src/households/seed";
 import { createTestDatabase } from "./test-database";
+import { createOutbox, type Mail } from "../src/auth/mailer";
+import { fakeWebAuthn, FakeDevice } from "./fake-webauthn";
 
 export type TestClient = {
   get(path: string): Promise<Response>;
@@ -35,6 +37,12 @@ export type TestApp = {
   /** Signs in through the test-only sign-in path and returns a client carrying the session. */
   signIn(personId: string): Promise<TestClient>;
   anonymous(): TestClient;
+  /** Emails the app has sent (the test Mailer keeps them instead of sending). */
+  outbox: Mail[];
+  /** Opens an Invite on `client`'s device and enrols a passkey (stubbed ceremony). Returns the accept response. */
+  acceptInvite(client: TestClient, token: string, device?: FakeDevice): Promise<Response>;
+  /** Signs `client` in with the device's passkey (stubbed ceremony). Returns the verify response. */
+  signInWithPasskey(client: TestClient, device: FakeDevice): Promise<Response>;
   close(): Promise<void>;
 };
 
@@ -74,7 +82,8 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
   const db = connect(database.url, { max: 5 });
   const clock = createTestClock(opts.now ?? "2026-01-01T12:00:00Z");
   const config: Config = { env: "test", testAuth: true, ...opts.config };
-  const app = createApp({ db, clock, config });
+  const outbox = createOutbox();
+  const app = createApp({ db, clock, config, webauthn: fakeWebAuthn, mailer: outbox });
   let seq = 0;
 
   return {
@@ -108,6 +117,9 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
       return client;
     },
     anonymous: () => makeClient(app),
+    outbox: outbox.sent,
+    acceptInvite: (client, token, device = new FakeDevice()) => acceptInvite(client, token, device),
+    signInWithPasskey,
     async close() {
       await db.close();
       await database.drop();
@@ -139,6 +151,23 @@ export function useTestApp(opts: TestAppOptions = {}): TestApp {
     addPerson: (h, o) => get().addPerson(h, o),
     signIn: (id) => get().signIn(id),
     anonymous: () => get().anonymous(),
+    get outbox() { return get().outbox; },
+    acceptInvite: (c, tok, d) => get().acceptInvite(c, tok, d),
+    signInWithPasskey: (c, d) => get().signInWithPasskey(c, d),
     close: () => get().close(),
   };
+}
+
+async function acceptInvite(client: TestClient, token: string, device: FakeDevice): Promise<Response> {
+  const begin = await client.post(`/api/invites/${token}/options`);
+  if (begin.status !== 200) return begin;
+  const { challengeId, options } = await begin.json();
+  return client.post(`/api/invites/${token}/accept`, { challengeId, response: device.create(options) });
+}
+
+async function signInWithPasskey(client: TestClient, device: FakeDevice): Promise<Response> {
+  const begin = await client.post("/api/auth/passkey/options");
+  if (begin.status !== 200) return begin;
+  const { challengeId, options } = await begin.json();
+  return client.post("/api/auth/passkey/verify", { challengeId, response: device.get(options) });
 }

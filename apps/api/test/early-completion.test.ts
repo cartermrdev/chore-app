@@ -172,6 +172,33 @@ describe("Early Completion in the app", () => {
     });
   });
 
+  test("with Time Slots, nextDue names the slot and Complete early completes that slot's Occurrence", async () => {
+    t.clock.set("2026-03-01T07:00:00Z");
+    const h = await household({
+      ...everyNDays(1),
+      slots: [
+        { name: "Morning", start: "06:00" },
+        { name: "Evening", start: "17:00" },
+      ],
+    });
+    const morning = await (await h.complete(h.standard, "morning")).json();
+    expect(morning.nextDue).toMatchObject({ dueDate: "2026-03-01", timeSlot: "Evening" });
+
+    const res = await (
+      await h.standard.post(`${h.base}/${h.chore.id}/complete-early`, {
+        idempotencyKey: "evening",
+        dueDate: "2026-03-01",
+        timeSlot: "Evening",
+      })
+    ).json();
+
+    expect(res).toMatchObject({
+      outcome: "completed",
+      completion: { dueDate: "2026-03-01", timeSlot: "Evening", early: true },
+      nextDue: { dueDate: "2026-03-02", timeSlot: "Morning" },
+    });
+  });
+
   test("a dueDate is required, and outsiders get 404", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household(everyNDays(1));

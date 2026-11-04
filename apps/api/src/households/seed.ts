@@ -40,7 +40,7 @@ export async function seedHousehold(db: Db, clock: Clock, input: SeedInput): Pro
       RETURNING id, name, time_zone`;
     const [person] = await tx`
       INSERT INTO persons (display_name, email, created_at)
-      VALUES (${input.adminName}, ${input.adminEmail ?? null}, ${now})
+      VALUES (${input.adminName}, ${input.adminEmail?.trim().toLowerCase() || null}, ${now})
       RETURNING id, display_name`;
     const [membership] = await tx`
       INSERT INTO memberships (household_id, person_id, role, created_at)

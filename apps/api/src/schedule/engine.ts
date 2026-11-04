@@ -23,9 +23,22 @@
  *   3. add a case to `parseFixedRule` so the API accepts it.
  * Windows, Due Times, horizons and `after` are handled generically.
  */
-import { addDays, compareDates, dayOfMonth, daysBetween, isLocalDate, localDateOf, mondayOf, startOfLocalDay, type LocalDate } from "./calendar";
+import {
+  addDays,
+  compareDates,
+  dayOfMonth,
+  daysBetween,
+  isLocalDate,
+  isLocalTime,
+  localDateOf,
+  localDateTimeToInstant,
+  mondayOf,
+  startOfLocalDay,
+  type LocalDate,
+  type LocalTime,
+} from "./calendar";
 
-export type { LocalDate } from "./calendar";
+export type { LocalDate, LocalTime } from "./calendar";
 
 /** ISO weekday: 1 = Monday … 7 = Sunday. */
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -41,11 +54,24 @@ export type FixedRule =
   /** Every month on this day (1–31); a day the month lacks falls on its last day. */
   | { type: "monthly"; day: number };
 
+/**
+ * A named time of day within a Fixed Schedule. Each due date produces one
+ * Occurrence per slot, due at the slot's start (with a Grace Period).
+ */
+export type TimeSlot = {
+  name: string;
+  start: LocalTime;
+  /** The Person copied onto each new Occurrence of this slot; null leaves it unassigned. */
+  assigneeId: string | null;
+};
+
 export type FixedSchedule = {
   kind: "fixed";
   /** The first possible due date (in the Household time zone). */
   startDate: LocalDate;
   rule: FixedRule;
+  /** Non-empty and sorted by start when present; absent means day-level Occurrences. */
+  slots?: TimeSlot[];
 };
 
 export type OneOffSchedule = { kind: "one_off"; dueDate: LocalDate };
@@ -137,23 +163,42 @@ function* planned(input: ScheduleInput): Generator<PlannedOccurrence> {
     case "fixed": {
       // Skip straight to the neighbourhood of `after` instead of walking from startDate.
       const from = input.after ? addDays(localDateOf(input.after, timeZone), -1) : schedule.startDate;
-      const dates = fixedDueDates(schedule, from);
-      let current = dates.next();
+      const entries = fixedEntries(schedule, from, timeZone);
+      let current = entries.next();
       while (!current.done) {
-        const next = dates.next();
-        const dueDate = current.value;
+        const next = entries.next();
         // ADR 0003: a Fixed Window runs until the next Occurrence's Window opens.
-        const windowEnd = next.done ? null : startOfLocalDay(next.value, timeZone);
-        yield {
-          dueDate,
-          timeSlot: null,
-          windowStart: startOfLocalDay(dueDate, timeZone),
-          dueTime: startOfLocalDay(addDays(dueDate, 1), timeZone),
-          windowEnd,
-        };
+        yield { ...current.value, windowEnd: next.done ? null : next.value.windowStart };
         current = next;
       }
       return;
+    }
+  }
+}
+
+/**
+ * A Fixed Schedule's Occurrences (without Window ends) in order: one per due
+ * date, or one per Time Slot of each due date, due at the slot's start.
+ */
+function* fixedEntries(
+  schedule: FixedSchedule,
+  from: LocalDate,
+  timeZone: string,
+): Generator<Omit<PlannedOccurrence, "windowEnd">> {
+  const slots = [...(schedule.slots ?? [])].sort((a, b) => (a.start < b.start ? -1 : 1));
+  for (const dueDate of fixedDueDates(schedule, from)) {
+    if (slots.length === 0) {
+      yield {
+        dueDate,
+        timeSlot: null,
+        windowStart: startOfLocalDay(dueDate, timeZone),
+        dueTime: startOfLocalDay(addDays(dueDate, 1), timeZone),
+      };
+      continue;
+    }
+    for (const slot of slots) {
+      const start = localDateTimeToInstant(dueDate, slot.start, timeZone);
+      yield { dueDate, timeSlot: slot.name, windowStart: start, dueTime: start };
     }
   }
 }
@@ -211,6 +256,7 @@ export function parseSchedule(raw: unknown, defaultStartDate: LocalDate): ParseR
   switch (s.kind) {
     case "one_off":
       if (!isLocalDate(s.dueDate)) return { ok: false, error: "dueDate must be YYYY-MM-DD" };
+      if (s.slots !== undefined) return { ok: false, error: "only Fixed Schedules have Time Slots" };
       return { ok: true, schedule: { kind: "one_off", dueDate: s.dueDate } };
     case "interval": {
       const startDate = s.startDate ?? defaultStartDate;
@@ -225,11 +271,37 @@ export function parseSchedule(raw: unknown, defaultStartDate: LocalDate): ParseR
       if (!isLocalDate(startDate)) return { ok: false, error: "startDate must be YYYY-MM-DD" };
       const rule = parseFixedRule(s.rule);
       if (typeof rule === "string") return { ok: false, error: rule };
-      return { ok: true, schedule: { kind: "fixed", startDate, rule } };
+      const slots = parseSlots(s.slots);
+      if (typeof slots === "string") return { ok: false, error: slots };
+      return { ok: true, schedule: { kind: "fixed", startDate, rule, ...(slots.length ? { slots } : {}) } };
     }
     default:
       return { ok: false, error: "unknown schedule kind" };
   }
+}
+
+/** Time Slots: names and starts distinct; sorted by start. Assignee ids are checked by the caller. */
+function parseSlots(raw: unknown): TimeSlot[] | string {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > 24) return "slots must be a list of at most 24 Time Slots";
+  const slots: TimeSlot[] = [];
+  for (const r of raw as any[]) {
+    const name = typeof r?.name === "string" ? r.name.trim() : "";
+    if (!name || name.length > 50) return "each Time Slot needs a name of 1 to 50 characters";
+    if (!isLocalTime(r.start)) return "each Time Slot needs a start time HH:MM";
+    const assigneeId = r.assigneeId ?? null;
+    if (assigneeId !== null && typeof assigneeId !== "string") return "assigneeId must be a Person id or null";
+    slots.push({ name, start: r.start, assigneeId });
+  }
+  if (new Set(slots.map((s) => s.name)).size !== slots.length) return "Time Slot names must be distinct";
+  if (new Set(slots.map((s) => s.start)).size !== slots.length) return "Time Slot start times must be distinct";
+  return slots.sort((a, b) => (a.start < b.start ? -1 : 1));
+}
+
+/** Every Assignee named by the Schedule's Time Slots. */
+export function slotAssigneeIds(schedule: Schedule): string[] {
+  if (schedule.kind !== "fixed" || !schedule.slots) return [];
+  return schedule.slots.flatMap((s) => (s.assigneeId ? [s.assigneeId] : []));
 }
 
 function parseFixedRule(raw: any): FixedRule | string {

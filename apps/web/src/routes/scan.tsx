@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Navigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Chore, type ScanOutcome, type Tag } from "../api";
 import { UndoButton } from "./corrections";
@@ -46,7 +47,9 @@ export function ScanPage({ tagId }: { tagId: string }) {
   if (scan.isSuccess) return <OutcomeScreen result={scan.data} tagId={tagId} onEarly={setEarly} />;
   if (scan.isError) {
     const err = scan.error;
-    if (err instanceof ApiError && err.status === 401) return <Screen title="Sign in to continue" />;
+    // Logged out (or the session expired): sign in, then come straight back here to scan again
+    // automatically. Nothing was recorded, so the Person doesn't need to tap the Tag again.
+    if (err instanceof ApiError && err.status === 401) return <Navigate to="/sign-in" search={{ next: `/nfc/${tagId}` }} replace />;
     if (err instanceof ApiError && err.status === 404) return <Screen title="This tag isn't recognised" />;
     return (
       <Screen title="Couldn't record the scan">
@@ -64,7 +67,7 @@ type OutcomeProps = { result: ScanOutcome; tagId: string; onEarly: (result: Scan
 
 function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
   const completeEarly = (offered: boolean, nextDue: Chore["nextDue"]) =>
-    offered && nextDue ? <CompleteEarly tagId={tagId} dueDate={nextDue.dueDate} onDone={onEarly} /> : null;
+    offered && nextDue ? <CompleteEarly tagId={tagId} next={nextDue} onDone={onEarly} /> : null;
 
   switch (result.outcome) {
     case "completed":
@@ -129,11 +132,12 @@ function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
  */
 function CompleteEarly({
   tagId,
-  dueDate,
+  next,
   onDone,
 }: {
   tagId: string;
-  dueDate: string;
+  /** The Occurrence shown as next due: the one this request names. */
+  next: NonNullable<Chore["nextDue"]>;
   onDone: (result: ScanOutcome) => void;
 }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -141,7 +145,7 @@ function CompleteEarly({
     mutationFn: () =>
       api<ScanOutcome>(`/scan/${encodeURIComponent(tagId)}/complete-early`, {
         method: "POST",
-        body: JSON.stringify({ idempotencyKey, dueDate }),
+        body: JSON.stringify({ idempotencyKey, dueDate: next.dueDate, timeSlot: next.timeSlot }),
         signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
       }),
     retry: (failures, error) => failures < RETRY_DELAYS_MS.length && isTransient(error),
@@ -171,11 +175,17 @@ function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "
   }
   return (
     <Screen title={result.chore.name} mark="✓">
-      <p>Credited to {c.completer.displayName}</p>
       <p>
-        {c.early ? "Completed early" : c.late ? "Late" : "On time"}
+        Credited to {c.completer.displayName} · {c.early ? "Completed early" : c.late ? "Late" : "On time"}
         <NextDue nextDue={result.nextDue} prefix=" · " />
       </p>
+      {(c.timeSlot || c.assignee) && (
+        <p>
+          {c.timeSlot}
+          {c.timeSlot && c.assignee ? " · " : ""}
+          {c.assignee && `Assigned to ${c.assignee.displayName}`}
+        </p>
+      )}
       <UndoButton completionId={c.id} completedAt={c.completedAt} onUndone={() => setUndone(true)} />
     </Screen>
   );

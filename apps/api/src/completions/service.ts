@@ -53,6 +53,8 @@ export type CompletionSummary = {
   timeSlot: string | null;
   completer: PersonRef;
   recorder: PersonRef;
+  /** The Occurrence's Assignee (who was expected to do it), which may differ from the Completer. */
+  assignee: PersonRef | null;
   method: Method;
   tagId: string | null;
   completedAt: string;
@@ -61,7 +63,8 @@ export type CompletionSummary = {
   early: boolean;
 };
 
-export type NextDueJson = { dueDate: string; dueTime: string } | null;
+/** The next Occurrence; `{ dueDate, timeSlot }` is what a "Complete early" request names. */
+export type NextDueJson = { dueDate: string; timeSlot: string | null; dueTime: string } | null;
 
 export type CompleteResult =
   /** A new Completion was recorded. */
@@ -119,7 +122,7 @@ export function parseEarlyTarget(body: any): { dueDate: string; timeSlot: string
   return { dueDate: body.dueDate, timeSlot };
 }
 
-type ChoreRow ={ id: string; name: string; schedule: any };
+type ChoreRow = { id: string; name: string; schedule: any; assignee_id: string | null };
 type InTx = { tx: Db; chore: ChoreRow; timeZone: string; now: Date };
 
 /** The checks, materialisation and idempotency every completion entry point shares. */
@@ -140,7 +143,7 @@ async function runCompletion(
   if (req.completerId !== req.recorderId && recorder.role !== "admin") return { outcome: "forbidden" };
 
   const [chore] = await db`
-    SELECT id, name, schedule FROM chores
+    SELECT id, name, schedule, assignee_id FROM chores
     WHERE id = ${req.choreId}::uuid AND household_id = ${req.householdId} AND archived_at IS NULL`.catch(() => []);
   if (!chore) return { outcome: "chore_not_found" };
 
@@ -228,7 +231,8 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
   let id = candidate.id;
   if (!id) {
     // Create it ahead of its Window. A concurrent request may have just done so; then we use that row.
-    await insertOccurrences(tx, { choreId: chore.id, householdId: req.householdId, now }, [planned!]);
+    const owner = { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id };
+    await insertOccurrences(tx, { chore: owner, householdId: req.householdId, now }, [planned!]);
     const [row] = await tx`
       SELECT id FROM occurrences
       WHERE chore_id = ${chore.id} AND due_date = ${candidate.dueDate}::date AND COALESCE(time_slot, '') = ${timeSlot ?? ""}`;
@@ -272,15 +276,15 @@ async function completeInTx(
 
 async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZone: string): Promise<NextDueJson> {
   const [firstOpen] = await tx`
-    SELECT due_date::text AS due_date, due_time FROM occurrences
+    SELECT due_date::text AS due_date, time_slot, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' ORDER BY window_start LIMIT 1`;
   const next = deriveNextDue(
     chore.schedule,
     timeZone,
-    firstOpen ? { dueDate: firstOpen.due_date, dueTime: firstOpen.due_time } : null,
+    firstOpen ? { dueDate: firstOpen.due_date, timeSlot: firstOpen.time_slot, dueTime: firstOpen.due_time } : null,
     await loadLatestOccurrence(tx, chore.id),
   );
-  return next ? { dueDate: next.dueDate, dueTime: next.dueTime.toISOString() } : null;
+  return next ? { dueDate: next.dueDate, timeSlot: next.timeSlot, dueTime: next.dueTime.toISOString() } : null;
 }
 
 /** The active Completion by id or by Occurrence. */
@@ -294,12 +298,14 @@ async function loadSummary(
     SELECT c.id, c.occurrence_id, o.chore_id, ch.name AS chore_name, o.due_date::text AS due_date, o.time_slot,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name,
+           ap.id AS assignee_id, ap.display_name AS assignee_name,
            c.method, c.tag_id, c.completed_at, c.late, c.early
     FROM completions c
     JOIN occurrences o ON o.id = c.occurrence_id
     JOIN chores ch ON ch.id = o.chore_id
     JOIN persons cp ON cp.id = c.completer_id
     JOIN persons rp ON rp.id = c.recorder_id
+    LEFT JOIN persons ap ON ap.id = o.assignee_id
     WHERE c.voided_at IS NULL
       AND (${completionId}::uuid IS NULL OR c.id = ${completionId}::uuid)
       AND (${occurrenceId}::uuid IS NULL OR c.occurrence_id = ${occurrenceId}::uuid)
@@ -314,6 +320,7 @@ async function loadSummary(
     timeSlot: r.time_slot,
     completer: { id: r.completer_id, displayName: r.completer_name },
     recorder: { id: r.recorder_id, displayName: r.recorder_name },
+    assignee: r.assignee_id ? { id: r.assignee_id, displayName: r.assignee_name } : null,
     method: r.method,
     tagId: r.tag_id,
     completedAt: new Date(r.completed_at).toISOString(),

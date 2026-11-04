@@ -51,7 +51,7 @@ describe("Manual Completion", () => {
         status: "completed",
         completion: { completer: { displayName: "Sam" }, method: "manual", completedAt: "2026-03-01T18:30:00.000Z" },
       },
-      nextDue: { dueDate: "2026-03-02", dueTime: "2026-03-03T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-02", timeSlot: null, dueTime: "2026-03-03T00:00:00.000Z" },
     });
   });
 
@@ -85,7 +85,7 @@ describe("Manual Completion", () => {
     expect(second).toEqual({
       outcome: "already_completed",
       completion: first.completion,
-      nextDue: { dueDate: "2026-03-02", dueTime: "2026-03-03T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-02", timeSlot: null, dueTime: "2026-03-03T00:00:00.000Z" },
     });
     expect(second.completion.completer.displayName).toBe("Sam");
   });
@@ -162,7 +162,7 @@ describe("Manual Completion", () => {
 
     const res = await (await admin.post(`${base}/${chore.id}/complete`, { idempotencyKey: "x" })).json();
 
-    expect(res).toEqual({ outcome: "nothing_due", nextDue: { dueDate: "2026-03-10", dueTime: "2026-03-11T00:00:00.000Z" } });
+    expect(res).toEqual({ outcome: "nothing_due", nextDue: { dueDate: "2026-03-10", timeSlot: null, dueTime: "2026-03-11T00:00:00.000Z" } });
   });
 
   test("a request without an idempotency key is rejected", async () => {

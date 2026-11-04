@@ -3,7 +3,7 @@
  * No database, no clock: every input is passed in.
  */
 import { describe, expect, test } from "bun:test";
-import { occurrencesUpTo, type ScheduleInput, type PlannedOccurrence } from "./engine";
+import { occurrencesUpTo, parseSchedule, type ScheduleInput, type PlannedOccurrence } from "./engine";
 
 const base = {
   timeZone: "Europe/London",
@@ -276,4 +276,175 @@ describe("Schedule engine", () => {
       expect(occurrencesUpTo(c.input)).toEqual(c.expected);
     });
   }
+});
+
+/** A Time Slot Occurrence: Window opens and Due Time falls at the slot's start. */
+const slot = (dueDate: string, timeSlot: string, windowStart: string, windowEnd: string | null) => ({
+  dueDate,
+  timeSlot,
+  windowStart: at(windowStart),
+  dueTime: at(windowStart),
+  windowEnd: windowEnd === null ? null : at(windowEnd),
+});
+
+const morningEvening = [
+  { name: "Morning", start: "06:00", assigneeId: null },
+  { name: "Evening", start: "17:00", assigneeId: null },
+];
+
+const slotCases: { name: string; input: ScheduleInput; expected: PlannedOccurrence[] }[] = [
+  {
+    name: "Time Slots: each slot is its own Occurrence, due at its start, with a Window until the next slot starts",
+    input: {
+      ...base,
+      schedule: { kind: "fixed", startDate: "2026-01-05", rule: { type: "every_n_days", n: 1 }, slots: morningEvening },
+      horizon: at("2026-01-06T12:00:00Z"),
+    },
+    expected: [
+      slot("2026-01-05", "Morning", "2026-01-05T06:00:00Z", "2026-01-05T17:00:00Z"),
+      slot("2026-01-05", "Evening", "2026-01-05T17:00:00Z", "2026-01-06T06:00:00Z"),
+      slot("2026-01-06", "Morning", "2026-01-06T06:00:00Z", "2026-01-06T17:00:00Z"),
+    ],
+  },
+  {
+    name: "Time Slots are ordered by start time whatever order they were given in",
+    input: {
+      ...base,
+      schedule: {
+        kind: "fixed",
+        startDate: "2026-01-05",
+        rule: { type: "every_n_days", n: 1 },
+        slots: [...morningEvening].reverse(),
+      },
+      horizon: at("2026-01-05T18:00:00Z"),
+    },
+    expected: [
+      slot("2026-01-05", "Morning", "2026-01-05T06:00:00Z", "2026-01-05T17:00:00Z"),
+      slot("2026-01-05", "Evening", "2026-01-05T17:00:00Z", "2026-01-06T06:00:00Z"),
+    ],
+  },
+  {
+    name: "Time Slots on weekdays: the last slot's Window runs until the next due date's first slot",
+    input: {
+      ...base,
+      // 2026-03-02 is a Monday; due Mondays and Thursdays.
+      schedule: { kind: "fixed", startDate: "2026-03-02", rule: { type: "weekdays", weekdays: [1, 4], n: 1 }, slots: morningEvening },
+      horizon: at("2026-03-05T12:00:00Z"),
+    },
+    expected: [
+      slot("2026-03-02", "Morning", "2026-03-02T06:00:00Z", "2026-03-02T17:00:00Z"),
+      slot("2026-03-02", "Evening", "2026-03-02T17:00:00Z", "2026-03-05T06:00:00Z"),
+      slot("2026-03-05", "Morning", "2026-03-05T06:00:00Z", "2026-03-05T17:00:00Z"),
+    ],
+  },
+  {
+    name: "Time Slots follow local time across the spring DST change in London",
+    input: {
+      ...base,
+      schedule: { kind: "fixed", startDate: "2026-03-28", rule: { type: "every_n_days", n: 1 }, slots: morningEvening },
+      horizon: at("2026-03-29T12:00:00Z"),
+    },
+    expected: [
+      slot("2026-03-28", "Morning", "2026-03-28T06:00:00Z", "2026-03-28T17:00:00Z"),
+      slot("2026-03-28", "Evening", "2026-03-28T17:00:00Z", "2026-03-29T05:00:00Z"),
+      slot("2026-03-29", "Morning", "2026-03-29T05:00:00Z", "2026-03-29T16:00:00Z"),
+    ],
+  },
+  {
+    name: "a Time Slot inside the spring DST gap starts when the clocks jump (01:30 GMT is 02:30 BST)",
+    input: {
+      ...base,
+      schedule: {
+        kind: "fixed",
+        startDate: "2026-03-29",
+        rule: { type: "every_n_days", n: 1 },
+        slots: [{ name: "Night", start: "01:30", assigneeId: null }],
+      },
+      horizon: at("2026-03-30T01:00:00Z"),
+    },
+    expected: [
+      slot("2026-03-29", "Night", "2026-03-29T01:30:00Z", "2026-03-30T00:30:00Z"),
+      slot("2026-03-30", "Night", "2026-03-30T00:30:00Z", "2026-03-31T00:30:00Z"),
+    ],
+  },
+  {
+    name: "a Time Slot in the repeated autumn hour starts at its first occurrence (01:30 BST)",
+    input: {
+      ...base,
+      schedule: {
+        kind: "fixed",
+        startDate: "2026-10-25",
+        rule: { type: "every_n_days", n: 1 },
+        slots: [{ name: "Night", start: "01:30", assigneeId: null }],
+      },
+      horizon: at("2026-10-25T12:00:00Z"),
+    },
+    expected: [slot("2026-10-25", "Night", "2026-10-25T00:30:00Z", "2026-10-26T01:30:00Z")],
+  },
+  {
+    name: "Time Slots with `after` at the Morning slot's start: planning resumes at the Evening slot",
+    input: {
+      ...base,
+      schedule: { kind: "fixed", startDate: "2026-01-05", rule: { type: "every_n_days", n: 1 }, slots: morningEvening },
+      after: at("2026-01-05T06:00:00Z"),
+      horizon: at("2026-01-06T06:00:00Z"),
+    },
+    expected: [
+      slot("2026-01-05", "Evening", "2026-01-05T17:00:00Z", "2026-01-06T06:00:00Z"),
+      slot("2026-01-06", "Morning", "2026-01-06T06:00:00Z", "2026-01-06T17:00:00Z"),
+    ],
+  },
+];
+
+describe("Schedule engine: Time Slots", () => {
+  for (const c of slotCases) {
+    test(c.name, () => {
+      expect(occurrencesUpTo(c.input)).toEqual(c.expected);
+    });
+  }
+});
+
+describe("parseSchedule: Time Slots", () => {
+  const fixed = (slots: unknown) => ({ kind: "fixed", rule: { type: "every_n_days", n: 1 }, slots });
+
+  test("accepts slots, sorts them by start and defaults a missing Assignee to none", () => {
+    const parsed = parseSchedule(fixed([{ name: " Evening ", start: "17:00" }, { name: "Morning", start: "06:00", assigneeId: "p1" }]), "2026-01-01");
+    expect(parsed).toEqual({
+      ok: true,
+      schedule: {
+        kind: "fixed",
+        startDate: "2026-01-01",
+        rule: { type: "every_n_days", n: 1 },
+        slots: [
+          { name: "Morning", start: "06:00", assigneeId: "p1" },
+          { name: "Evening", start: "17:00", assigneeId: null },
+        ],
+      },
+    });
+  });
+
+  test("an empty slot list means no Time Slots", () => {
+    expect(parseSchedule(fixed([]), "2026-01-01")).toEqual({
+      ok: true,
+      schedule: { kind: "fixed", startDate: "2026-01-01", rule: { type: "every_n_days", n: 1 } },
+    });
+  });
+
+  for (const [why, slots] of [
+    ["not a list", "Morning"],
+    ["a blank name", [{ name: " ", start: "06:00" }]],
+    ["a bad start time", [{ name: "Morning", start: "6am" }]],
+    ["an out-of-range start time", [{ name: "Morning", start: "24:00" }]],
+    ["duplicate names", [{ name: "A", start: "06:00" }, { name: "A", start: "07:00" }]],
+    ["duplicate start times", [{ name: "A", start: "06:00" }, { name: "B", start: "06:00" }]],
+    ["a non-string Assignee", [{ name: "A", start: "06:00", assigneeId: 5 }]],
+  ] as const) {
+    test(`rejects ${why}`, () => {
+      expect(parseSchedule(fixed(slots), "2026-01-01").ok).toBe(false);
+    });
+  }
+
+  test("rejects slots on a One-off Schedule", () => {
+    expect(parseSchedule({ kind: "one_off", dueDate: "2026-01-01", slots: [{ name: "A", start: "06:00" }] }, "2026-01-01").ok).toBe(false);
+  });
 });

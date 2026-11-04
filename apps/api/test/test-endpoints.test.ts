@@ -5,11 +5,15 @@ import { loadConfig } from "../src/config";
 import { useTestApp } from "./harness";
 
 describe("test-only sign-in", () => {
-  test("cannot be enabled in production", () => {
-    expect(() => loadConfig({ APP_ENV: "production", ENABLE_TEST_AUTH: "1" })).toThrow();
-    expect(() =>
-      createApp({ db: null as never, clock: systemClock, config: { env: "production", testAuth: true } }),
-    ).toThrow();
+  test("cannot be enabled outside test mode", () => {
+    for (const env of ["production", "development"] as const) {
+      expect(() => loadConfig({ APP_ENV: env, ENABLE_TEST_AUTH: "1" })).toThrow();
+      expect(() => createApp({ db: null as never, clock: systemClock, config: { env, testAuth: true } })).toThrow();
+    }
+  });
+
+  test("can be enabled in test mode", () => {
+    expect(loadConfig({ APP_ENV: "test", ENABLE_TEST_AUTH: "1" }).testAuth).toBe(true);
   });
 
   test("is off unless explicitly enabled", () => {

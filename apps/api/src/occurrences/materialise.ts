@@ -31,7 +31,8 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
   const choreId = scope.choreId ?? null;
 
   const chores = await db`
-    SELECT c.id, c.schedule, last.window_start AS last_start, last.window_end AS last_end, last.closed_at AS last_closed
+    SELECT c.id, c.schedule, c.assignee_id,
+           last.window_start AS last_start, last.window_end AS last_end, last.closed_at AS last_closed
     FROM chores c
     -- The latest stored Occurrence; keep in step with loadLatestOccurrence below.
     LEFT JOIN LATERAL (
@@ -45,6 +46,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
     WHERE c.household_id = ${householdId} AND c.archived_at IS NULL
       AND (${choreId}::uuid IS NULL OR c.id = ${choreId}::uuid)`;
 
+  let members: Set<string> | undefined;
   for (const chore of chores) {
     const planned = occurrencesUpTo({
       schedule: chore.schedule as Schedule,
@@ -54,7 +56,13 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       after: resumeAfter(chore.last_start ? { windowStart: chore.last_start, windowEnd: chore.last_end } : null),
       horizon: now,
     });
-    await insertOccurrences(db, { choreId: chore.id, householdId, now }, planned);
+    if (planned.length === 0) continue;
+    members ??= await currentMembers(db, householdId);
+    await insertOccurrences(
+      db,
+      { chore: { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id }, householdId, now, members },
+      planned,
+    );
   }
 
   // A Fixed Window that closed without a Completion: Missed.
@@ -66,28 +74,59 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
 }
 
 /**
- * Stores planned Occurrences as Open (skipping any that already exist). The
- * one place Occurrence rows are created: the materialiser, and Early
- * Completion, which creates the next Occurrence ahead of its Window.
+ * Stores planned Occurrences as Open (skipping any that already exist),
+ * copying each one's Assignee. The one place Occurrence rows are created:
+ * the materialiser, and Early Completion, which creates the next Occurrence
+ * ahead of its Window.
  */
 export async function insertOccurrences(
   db: Db,
-  scope: { choreId: string; householdId: string; now: Date },
+  scope: {
+    chore: { id: string; schedule: Schedule; assigneeId: string | null };
+    householdId: string;
+    now: Date;
+    /** Current Members of the Household, if the caller already has them. */
+    members?: Set<string>;
+  },
   planned: PlannedOccurrence[],
 ): Promise<void> {
   if (planned.length === 0) return;
-  const rows = planned.map((p) => ({
-    chore_id: scope.choreId,
-    household_id: scope.householdId,
-    due_date: p.dueDate,
-    time_slot: p.timeSlot,
-    window_start: p.windowStart,
-    due_time: p.dueTime,
-    window_end: p.windowEnd,
-    status: "open",
-    created_at: scope.now,
-  }));
+  const { chore, householdId, now } = scope;
+  const members = scope.members ?? (await currentMembers(db, householdId));
+  const rows = planned.map((p) => {
+    const assignee = assigneeFor(chore.schedule, chore.assigneeId, p.timeSlot);
+    return {
+      chore_id: chore.id,
+      household_id: householdId,
+      due_date: p.dueDate,
+      time_slot: p.timeSlot,
+      window_start: p.windowStart,
+      due_time: p.dueTime,
+      window_end: p.windowEnd,
+      // An Assignee whose Membership has since ended is not copied.
+      assignee_id: assignee && members.has(assignee) ? assignee : null,
+      status: "open",
+      created_at: now,
+    };
+  });
   await db`INSERT INTO occurrences ${db(rows)} ON CONFLICT DO NOTHING`;
+}
+
+/**
+ * The Assignee to copy onto a new Occurrence: its Time Slot's when the
+ * Schedule has slots (an unassigned slot stays unassigned), else the Chore's.
+ */
+export function assigneeFor(schedule: Schedule, choreAssigneeId: string | null, timeSlot: string | null): string | null {
+  if (schedule.kind === "fixed" && schedule.slots?.length) {
+    return schedule.slots.find((s) => s.name === timeSlot)?.assigneeId ?? null;
+  }
+  return choreAssigneeId;
+}
+
+async function currentMembers(db: Db, householdId: string): Promise<Set<string>> {
+  const rows = await db`
+    SELECT person_id FROM memberships WHERE household_id = ${householdId} AND ended_at IS NULL`;
+  return new Set(rows.map((r: any) => r.person_id as string));
 }
 
 export type StoredWindow = { windowStart: Date; windowEnd: Date | null };
@@ -105,7 +144,8 @@ export function resumeAfter(latest: StoredWindow | null): Date | null {
   return new Date(latest.windowEnd.getTime() - 1);
 }
 
-export type NextDue = { dueDate: string; dueTime: Date };
+/** The next Occurrence: what a "Complete early" request names ({ dueDate, timeSlot }). */
+export type NextDue = { dueDate: string; timeSlot: string | null; dueTime: Date };
 
 /**
  * A Chore's latest stored Occurrence (where planning resumes), and when it
@@ -134,12 +174,12 @@ export async function loadLatestOccurrence(db: Db, choreId: string): Promise<Lat
 export function deriveNextDue(
   schedule: Schedule,
   timeZone: string,
-  firstOpen: { dueDate: string; dueTime: Date } | null,
+  firstOpen: NextDue | null,
   latest: LatestOccurrence,
 ): NextDue | null {
-  if (firstOpen) return { dueDate: firstOpen.dueDate, dueTime: firstOpen.dueTime };
+  if (firstOpen) return { dueDate: firstOpen.dueDate, timeSlot: firstOpen.timeSlot, dueTime: firstOpen.dueTime };
   const next = planNext(schedule, timeZone, latest);
-  return next ? { dueDate: next.dueDate, dueTime: next.dueTime } : null;
+  return next ? { dueDate: next.dueDate, timeSlot: next.timeSlot, dueTime: next.dueTime } : null;
 }
 
 /** The next Occurrence the Schedule will create after the latest stored one, however far ahead. */

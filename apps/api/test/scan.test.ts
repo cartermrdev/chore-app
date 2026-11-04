@@ -41,7 +41,7 @@ describe("Scan", () => {
         completedAt: "2026-03-01T18:30:00.000Z",
         late: false,
       }),
-      nextDue: { dueDate: "2026-03-02", dueTime: "2026-03-03T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-02", timeSlot: null, dueTime: "2026-03-03T00:00:00.000Z" },
     });
     const detail = await h.detail();
     expect(detail.occurrences[0]).toMatchObject({
@@ -62,7 +62,7 @@ describe("Scan", () => {
       outcome: "already_completed",
       chore: { id: h.chore.id, name: "Dishes" },
       completion: first.completion,
-      nextDue: { dueDate: "2026-03-02", dueTime: "2026-03-03T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-02", timeSlot: null, dueTime: "2026-03-03T00:00:00.000Z" },
       earlyCompletionOffered: true,
     });
     expect((await h.detail()).occurrences).toHaveLength(1);
@@ -77,7 +77,7 @@ describe("Scan", () => {
     expect(res).toEqual({
       outcome: "nothing_due",
       chore: { id: h.chore.id, name: "Dishes" },
-      nextDue: { dueDate: "2026-03-05", dueTime: "2026-03-06T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-05", timeSlot: null, dueTime: "2026-03-06T00:00:00.000Z" },
       earlyCompletionOffered: true,
     });
   });

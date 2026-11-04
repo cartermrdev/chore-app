@@ -88,7 +88,7 @@ describe("Occurrences and the chore list", () => {
     expect(chores[0]).toMatchObject({
       name: "Dishes",
       currentOccurrence: { dueDate: "2026-03-01", status: "open", completion: null },
-      nextDue: { dueDate: "2026-03-01", dueTime: "2026-03-02T00:00:00.000Z" },
+      nextDue: { dueDate: "2026-03-01", timeSlot: null, dueTime: "2026-03-02T00:00:00.000Z" },
     });
   });
 
@@ -99,7 +99,7 @@ describe("Occurrences and the chore list", () => {
     const { chores } = await (await admin.get(base)).json();
 
     expect(chores[0].currentOccurrence).toBeNull();
-    expect(chores[0].nextDue).toEqual({ dueDate: "2026-03-05", dueTime: "2026-03-06T00:00:00.000Z" });
+    expect(chores[0].nextDue).toEqual({ dueDate: "2026-03-05", timeSlot: null, dueTime: "2026-03-06T00:00:00.000Z" });
   });
 
   test("Occurrences are stored once each, however often and however concurrently they are read", async () => {
