@@ -5,6 +5,7 @@ import { requireAdmin, requireMembership } from "../households/membership";
 import { localDateOf } from "../schedule/calendar";
 import { parseSchedule } from "../schedule/engine";
 import { getChore, listChores } from "./views";
+import { archiveChore, deleteChore } from "./lifecycle";
 import { completeDueOccurrence } from "../completions/service";
 
 /** /api/households/:householdId/chores */
@@ -98,4 +99,21 @@ export const choreRoutes = new Hono<AppEnv>()
       VALUES (${householdId}, ${name}, ${parsed.schedule}, ${now})
       RETURNING id, name, schedule`;
     return c.json({ id: row.id, name: row.name, schedule: row.schedule }, 201);
+  })
+  .post("/:choreId/archive", requireAdmin, async (c) => {
+    const archived = await archiveChore(c.var.deps, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (!archived) return c.json({ error: "not_found" }, 404);
+    return c.json(archived);
+  })
+  .delete("/:choreId", requireAdmin, async (c) => {
+    const result = await deleteChore(c.var.deps.db, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (result.ok) return c.body(null, 204);
+    if (result.error === "has_history") return c.json({ error: "has_history" }, 409);
+    return c.json({ error: "not_found" }, 404);
   });

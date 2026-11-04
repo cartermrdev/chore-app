@@ -95,4 +95,5 @@ export type ScanOutcome =
   | { outcome: "completed" | "already_completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"] }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: Chore["nextDue"]; earlyCompletionOffered: boolean }
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
+  | { outcome: "tag_unregistered"; canClaim: boolean; households: { id: string; name: string }[] }
   | { outcome: "not_a_member" };

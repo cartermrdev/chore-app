@@ -373,6 +373,20 @@ describe("Corrections", () => {
       expect((await h.detail()).occurrences[0].excuse.note).toBe("first");
     });
 
+    test("Excusals and voided Completions are history: the Chore can't be hard-deleted", async () => {
+      t.clock.set("2026-03-01T09:00:00Z");
+      const excused = await household();
+      const [open] = (await excused.detail()).occurrences;
+      await excused.excuse(excused.admin, open.id, "Ill");
+      expect((await excused.admin.delete(`${excused.base}/${excused.chore.id}`)).status).toBe(409);
+
+      const voided = await household();
+      const completion = await voided.completeOk(voided.standard, "k1");
+      await voided.undo(voided.standard, completion.id);
+      expect((await voided.admin.delete(`${voided.base}/${voided.chore.id}`)).status).toBe(409);
+      expect((await voided.detail()).occurrences[0].voidedCompletions).toHaveLength(1);
+    });
+
     test("Standard Persons cannot Excuse", async () => {
       t.clock.set("2026-03-01T09:00:00Z");
       const h = await household();
