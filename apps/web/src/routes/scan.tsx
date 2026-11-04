@@ -21,6 +21,8 @@ function isTransient(error: unknown): boolean {
  */
 export function ScanPage({ tagId }: { tagId: string }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  /** The answer to an explicit "Complete early" request, once confirmed by the backend. */
+  const [early, setEarly] = useState<ScanOutcome | null>(null);
   const scan = useMutation({
     mutationFn: () =>
       api<ScanOutcome>(`/scan/${encodeURIComponent(tagId)}`, {
@@ -40,7 +42,8 @@ export function ScanPage({ tagId }: { tagId: string }) {
     scan.mutate();
   }, [scan]);
 
-  if (scan.isSuccess) return <OutcomeScreen result={scan.data} />;
+  if (early) return <OutcomeScreen result={early} tagId={tagId} onEarly={setEarly} />;
+  if (scan.isSuccess) return <OutcomeScreen result={scan.data} tagId={tagId} onEarly={setEarly} />;
   if (scan.isError) {
     const err = scan.error;
     if (err instanceof ApiError && err.status === 401) return <Screen title="Sign in to continue" />;
@@ -57,7 +60,14 @@ export function ScanPage({ tagId }: { tagId: string }) {
   return <Screen title={scan.failureCount > 0 ? "Retrying…" : "Recording…"} />;
 }
 
-function OutcomeScreen({ result }: { result: ScanOutcome }) {
+type OutcomeProps = { result: ScanOutcome; tagId: string; onEarly: (result: ScanOutcome) => void };
+
+function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
+  const completeEarly = (offered: boolean) =>
+    offered && result.outcome !== "tag_unlinked" && result.outcome !== "not_a_member" && result.nextDue ? (
+      <CompleteEarly tagId={tagId} dueDate={result.nextDue.dueDate} onDone={onEarly} />
+    ) : null;
+
   switch (result.outcome) {
     case "completed": {
       const c = result.completion;
@@ -65,7 +75,7 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
         <Screen title={result.chore.name} mark="✓">
           <p>Credited to {c.completer.displayName}</p>
           <p>
-            {c.late ? "Late" : "On time"}
+            {c.early ? "Completed early" : c.late ? "Late" : "On time"}
             <NextDue nextDue={result.nextDue} prefix=" · " />
           </p>
         </Screen>
@@ -81,6 +91,7 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
           <p>
             <NextDue nextDue={result.nextDue} />
           </p>
+          {completeEarly(result.earlyCompletionOffered)}
         </Screen>
       );
     }
@@ -91,6 +102,7 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
           <p>
             <NextDue nextDue={result.nextDue} />
           </p>
+          {completeEarly(result.earlyCompletionOffered)}
         </Screen>
       );
     case "tag_unlinked":
@@ -106,6 +118,42 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
         </Screen>
       );
   }
+}
+
+/**
+ * "Complete early": a separate, explicit request (never part of the Scan)
+ * that records an Early Completion on the next Occurrence, the one shown as
+ * next due. One idempotency key per button, reused by every retry.
+ */
+function CompleteEarly({
+  tagId,
+  dueDate,
+  onDone,
+}: {
+  tagId: string;
+  dueDate: string;
+  onDone: (result: ScanOutcome) => void;
+}) {
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const early = useMutation({
+    mutationFn: () =>
+      api<ScanOutcome>(`/scan/${encodeURIComponent(tagId)}/complete-early`, {
+        method: "POST",
+        body: JSON.stringify({ idempotencyKey, dueDate }),
+        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+      }),
+    retry: (failures, error) => failures < RETRY_DELAYS_MS.length && isTransient(error),
+    retryDelay: (failures) => RETRY_DELAYS_MS[failures] ?? RETRY_DELAYS_MS.at(-1)!,
+    onSuccess: onDone,
+  });
+  return (
+    <>
+      <button type="button" disabled={early.isPending} onClick={() => early.mutate()}>
+        {early.isPending ? "Recording…" : "Complete early"}
+      </button>
+      {early.isError && <p role="alert">Couldn't record it. Nothing has been recorded yet; try again.</p>}
+    </>
+  );
 }
 
 function Screen({ title, mark, children }: { title: string; mark?: string; children?: React.ReactNode }) {

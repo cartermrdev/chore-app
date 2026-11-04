@@ -38,6 +38,8 @@ export type Completion = {
   method: "manual" | "nfc";
   completedAt: string;
   late: boolean;
+  /** An Early Completion: recorded before the Occurrence was due. */
+  early: boolean;
 };
 
 export type Chore = {
@@ -67,7 +69,14 @@ export type ChoreRef = { id: string; name: string };
 
 /** POST /api/scan/:tagId. Mirrors ScanOutcome in apps/api/src/scan/resolver.ts. */
 export type ScanOutcome =
-  | { outcome: "completed" | "already_completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"] }
+  | { outcome: "completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"] }
+  | {
+      outcome: "already_completed";
+      chore: ChoreRef;
+      completion: Completion;
+      nextDue: Chore["nextDue"];
+      earlyCompletionOffered: boolean;
+    }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: Chore["nextDue"]; earlyCompletionOffered: boolean }
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
   | { outcome: "not_a_member" };

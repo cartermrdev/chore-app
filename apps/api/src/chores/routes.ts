@@ -5,7 +5,22 @@ import { requireAdmin, requireMembership } from "../households/membership";
 import { localDateOf } from "../schedule/calendar";
 import { parseSchedule } from "../schedule/engine";
 import { getChore, listChores } from "./views";
-import { completeDueOccurrence } from "../completions/service";
+import { completeDueOccurrence, completeEarly, parseEarlyTarget, type CompleteResult } from "../completions/service";
+import type { Context } from "hono";
+
+function completionResponse(c: Context<AppEnv>, result: CompleteResult) {
+  switch (result.outcome) {
+    case "completed":
+    case "already_completed":
+    case "nothing_due":
+      return c.json(result);
+    case "chore_not_found":
+    case "not_a_member":
+      return c.json({ error: "not_found" }, 404);
+    case "forbidden":
+      return c.json({ error: "forbidden" }, 403);
+  }
+}
 
 /** /api/households/:householdId/chores */
 export const choreRoutes = new Hono<AppEnv>()
@@ -35,18 +50,27 @@ export const choreRoutes = new Hono<AppEnv>()
       method: "manual",
       idempotencyKey,
     });
-    switch (result.outcome) {
-      case "completed":
-      case "already_completed":
-      case "nothing_due":
-        return c.json(result);
-      case "chore_not_found":
-        return c.json({ error: "not_found" }, 404);
-      case "not_a_member":
-        return c.json({ error: "not_found" }, 404);
-      case "forbidden":
-        return c.json({ error: "forbidden" }, 403);
+    return completionResponse(c, result);
+  })
+  /** Early Completion: an explicit request naming the next Occurrence ({ dueDate, timeSlot? }). */
+  .post("/:choreId/complete-early", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const idempotencyKey = body?.idempotencyKey;
+    if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 200) {
+      return c.json({ error: "idempotencyKey is required" }, 400);
     }
+    const target = parseEarlyTarget(body);
+    if (!target) return c.json({ error: "dueDate (YYYY-MM-DD) is required" }, 400);
+    const result = await completeEarly(c.var.deps, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+      completerId: c.var.personId,
+      recorderId: c.var.personId,
+      method: "manual",
+      idempotencyKey,
+      ...target,
+    });
+    return completionResponse(c, result);
   })
   .post("/", requireAdmin, async (c) => {
     const { db, clock } = c.var.deps;

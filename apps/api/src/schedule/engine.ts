@@ -6,7 +6,14 @@
  * it returns the Occurrences that should exist up to a horizon. It owns all
  * calendar maths (time zones, DST, month ends).
  *
- * Supported so far: One-off, and Fixed "every N days".
+ * Supported so far: One-off, Interval, and Fixed "every N days".
+ *
+ * Interval: the first Occurrence falls due on `startDate`; each later one
+ * falls due `periodDays` after the local date of the latest Occurrence's
+ * Completion (so an Early Completion restarts the period), and never on or
+ * before the latest stored due date. While the latest Occurrence has no
+ * Completion there is no next one. Interval and One-off Occurrences have no
+ * Window end: they stay Open until completed and are never Missed.
  *
  * Adding a Fixed kind (e.g. weekdays every N weeks, monthly day X):
  *   1. add a member to `FixedRule`,
@@ -29,7 +36,15 @@ export type FixedSchedule = {
 
 export type OneOffSchedule = { kind: "one_off"; dueDate: LocalDate };
 
-export type Schedule = FixedSchedule | OneOffSchedule;
+export type IntervalSchedule = {
+  kind: "interval";
+  /** When the first Occurrence falls due (in the Household time zone). */
+  startDate: LocalDate;
+  /** Days from one Completion to the next Occurrence's due date. */
+  periodDays: number;
+};
+
+export type Schedule = FixedSchedule | IntervalSchedule | OneOffSchedule;
 
 export type Pause = { startDate: LocalDate; endDate: LocalDate | null };
 
@@ -37,6 +52,10 @@ export type ScheduleInput = {
   schedule: Schedule;
   timeZone: string;
   pauses: Pause[];
+  /**
+   * Interval only: when the latest stored Occurrence (the one whose Window
+   * opened at `after`) was completed; null when it has no active Completion.
+   */
   lastCompletionAt: Date | null;
   /** Only Occurrences whose Window opens strictly after this instant (null: from the start). */
   after: Date | null;
@@ -83,6 +102,24 @@ function* planned(input: ScheduleInput): Generator<PlannedOccurrence> {
         windowEnd: null,
       };
       return;
+    case "interval": {
+      let dueDate: LocalDate;
+      if (!input.after) dueDate = schedule.startDate;
+      else if (!input.lastCompletionAt) return; // the latest Occurrence is still outstanding
+      else {
+        const fromCompletion = addDays(localDateOf(input.lastCompletionAt, timeZone), schedule.periodDays);
+        const afterLatest = addDays(localDateOf(input.after, timeZone), 1);
+        dueDate = compareDates(fromCompletion, afterLatest) >= 0 ? fromCompletion : afterLatest;
+      }
+      yield {
+        dueDate,
+        timeSlot: null,
+        windowStart: startOfLocalDay(dueDate, timeZone),
+        dueTime: startOfLocalDay(addDays(dueDate, 1), timeZone),
+        windowEnd: null,
+      };
+      return;
+    }
     case "fixed": {
       // Skip straight to the neighbourhood of `after` instead of walking from startDate.
       const from = input.after ? addDays(localDateOf(input.after, timeZone), -1) : schedule.startDate;
@@ -136,6 +173,14 @@ export function parseSchedule(raw: unknown, defaultStartDate: LocalDate): ParseR
     case "one_off":
       if (!isLocalDate(s.dueDate)) return { ok: false, error: "dueDate must be YYYY-MM-DD" };
       return { ok: true, schedule: { kind: "one_off", dueDate: s.dueDate } };
+    case "interval": {
+      const startDate = s.startDate ?? defaultStartDate;
+      if (!isLocalDate(startDate)) return { ok: false, error: "startDate must be YYYY-MM-DD" };
+      if (!Number.isInteger(s.periodDays) || s.periodDays < 1 || s.periodDays > 3660) {
+        return { ok: false, error: "periodDays must be an integer from 1 to 3660" };
+      }
+      return { ok: true, schedule: { kind: "interval", startDate, periodDays: s.periodDays } };
+    }
     case "fixed": {
       const startDate = s.startDate ?? defaultStartDate;
       if (!isLocalDate(startDate)) return { ok: false, error: "startDate must be YYYY-MM-DD" };

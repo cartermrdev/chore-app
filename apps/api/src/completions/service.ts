@@ -19,7 +19,14 @@
 import type { Clock } from "../clock";
 import type { Db } from "../db/client";
 import { findMembership } from "../households/membership";
-import { deriveNextDue, materialise } from "../occurrences/materialise";
+import { isLocalDate } from "../schedule/calendar";
+import {
+  deriveNextDue,
+  insertOccurrences,
+  materialise,
+  planNext,
+  type LatestOccurrence,
+} from "../occurrences/materialise";
 
 export type Method = "manual" | "nfc";
 
@@ -50,6 +57,8 @@ export type CompletionSummary = {
   tagId: string | null;
   completedAt: string;
   late: boolean;
+  /** An Early Completion: recorded before the Occurrence was due (only via `completeEarly`). */
+  early: boolean;
 };
 
 export type NextDueJson = { dueDate: string; dueTime: string } | null;
@@ -76,9 +85,49 @@ export function isLate(completedAt: Date, occ: { dueTime: Date; timeSlot: string
 }
 
 /** Completes the Chore's earliest Open Occurrence whose Window is open now. */
-export async function completeDueOccurrence(
+export function completeDueOccurrence(deps: { db: Db; clock: Clock }, req: CompleteRequest): Promise<CompleteResult> {
+  return runCompletion(deps, req, req.idempotencyKey, (c) => completeInTx(c.tx, c.chore, c.timeZone, req, c.now));
+}
+
+export type EarlyRequest = CompleteRequest & {
+  /** The Occurrence the Person means to complete: the next one, as they last saw it (`nextDue`). */
+  dueDate: string;
+  timeSlot?: string | null;
+};
+
+/**
+ * Records an Early Completion: completes the Chore's next Occurrence even
+ * though it is not yet due (creating it ahead of its Window if necessary).
+ * Always a separate, explicit request; a Scan never implies it. If the next
+ * Occurrence is already due, it is completed as normal (`early: false`).
+ *
+ * The request names the Occurrence it means, so two people pressing
+ * "Complete early" at once produce one Completion: the loser, or anyone
+ * naming an Occurrence that is no longer the next, gets `already_completed`
+ * (that Occurrence has a Completion) or `nothing_due` (stale; see nextDue).
+ */
+export function completeEarly(deps: { db: Db; clock: Clock }, req: EarlyRequest): Promise<CompleteResult> {
+  // Separate key space so an early request never replays a plain completion's stored result.
+  return runCompletion(deps, req, `early:${req.idempotencyKey}`, (c) => completeEarlyInTx(c, req));
+}
+
+/** Validates the Occurrence an untrusted early request names; null if invalid. */
+export function parseEarlyTarget(body: any): { dueDate: string; timeSlot: string | null } | null {
+  if (!isLocalDate(body?.dueDate)) return null;
+  const timeSlot = body.timeSlot ?? null;
+  if (timeSlot !== null && (typeof timeSlot !== "string" || timeSlot.length > 100)) return null;
+  return { dueDate: body.dueDate, timeSlot };
+}
+
+type ChoreRow ={ id: string; name: string; schedule: any };
+type InTx = { tx: Db; chore: ChoreRow; timeZone: string; now: Date };
+
+/** The checks, materialisation and idempotency every completion entry point shares. */
+async function runCompletion(
   deps: { db: Db; clock: Clock },
   req: CompleteRequest,
+  idempotencyKey: string,
+  work: (c: InTx) => Promise<CompleteResult>,
 ): Promise<CompleteResult> {
   const { db, clock } = deps;
   if ((req.method === "nfc") !== Boolean(req.tagId)) throw new Error("tagId is required for, and only for, Method NFC");
@@ -101,61 +150,113 @@ export async function completeDueOccurrence(
   return db.begin(async (tx) => {
     const claimed = await tx`
       INSERT INTO completion_requests (recorder_id, idempotency_key, result, created_at)
-      VALUES (${req.recorderId}, ${req.idempotencyKey}, NULL, ${now})
+      VALUES (${req.recorderId}, ${idempotencyKey}, NULL, ${now})
       ON CONFLICT DO NOTHING
       RETURNING 1`;
     if (claimed.length === 0) {
       // A repeat: the original committed before our insert returned (it waits on the key).
       const [stored] = await tx`
         SELECT result FROM completion_requests
-        WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${req.idempotencyKey}`;
+        WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
       return stored.result as CompleteResult;
     }
 
-    const result = await completeInTx(tx, chore, completer.timeZone, req, now);
+    const result = await work({ tx, chore, timeZone: completer.timeZone, now });
     await tx`
       UPDATE completion_requests SET result = ${result}
-      WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${req.idempotencyKey}`;
+      WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
     return result;
   });
 }
 
+type Target = { id: string; windowStart: Date; dueTime: Date; timeSlot: string | null };
+
+/**
+ * Records the Completion on the target Occurrence, or reports the one a
+ * concurrent request got in first (the partial unique index decides).
+ */
+async function completeTarget({ tx, chore, timeZone, now }: InTx, req: CompleteRequest, target: Target): Promise<CompleteResult> {
+  const late = isLate(now, target);
+  const early = now < target.windowStart;
+  const inserted = await tx`
+    INSERT INTO completions
+      (occurrence_id, household_id, completer_id, recorder_id, method, tag_id, completed_at, late, early)
+    VALUES (${target.id}, ${req.householdId}, ${req.completerId}, ${req.recorderId}, ${req.method},
+            ${req.tagId ?? null}, ${now}, ${late}, ${early})
+    ON CONFLICT (occurrence_id) WHERE voided_at IS NULL DO NOTHING
+    RETURNING id`;
+  if (inserted.length > 0) {
+    await tx`UPDATE occurrences SET status = 'completed' WHERE id = ${target.id}`;
+    return {
+      outcome: "completed",
+      completion: (await loadSummary(tx, { completionId: inserted[0].id }))!,
+      nextDue: await nextDueJson(tx, chore, timeZone),
+    };
+  }
+  // Lost a race: a concurrent request completed this Occurrence first.
+  return {
+    outcome: "already_completed",
+    completion: (await loadSummary(tx, { occurrenceId: target.id }))!,
+    nextDue: await nextDueJson(tx, chore, timeZone),
+  };
+}
+
+async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteResult> {
+  const { tx, chore, timeZone, now } = c;
+  const timeSlot = req.timeSlot ?? null;
+
+  // The next Occurrence: the earliest stored one still completable, else the one the Schedule creates next.
+  const [open] = await tx`
+    SELECT id, due_date::text AS due_date, time_slot, window_start, due_time FROM occurrences
+    WHERE chore_id = ${chore.id} AND status = 'open' AND (window_end IS NULL OR window_end > ${now})
+    ORDER BY window_start LIMIT 1`;
+  const planned = open ? null : planNext(chore.schedule, timeZone, await latestOccurrence(tx, chore.id));
+  const candidate: (Omit<Target, "id"> & { id: string | null; dueDate: string }) | null = open
+    ? { id: open.id, dueDate: open.due_date, timeSlot: open.time_slot, windowStart: open.window_start, dueTime: open.due_time }
+    : planned && { id: null, ...planned };
+
+  if (!candidate || candidate.dueDate !== req.dueDate || candidate.timeSlot !== timeSlot) {
+    // Not the next Occurrence: completed already (perhaps by a concurrent request), or a stale request.
+    const [asked] = await tx`
+      SELECT id FROM occurrences
+      WHERE chore_id = ${chore.id} AND due_date = ${req.dueDate}::date AND COALESCE(time_slot, '') = ${timeSlot ?? ""}`.catch(() => []);
+    const existing = asked ? await loadSummary(tx, { occurrenceId: asked.id }) : null;
+    const nextDue = await nextDueJson(tx, chore, timeZone);
+    return existing ? { outcome: "already_completed", completion: existing, nextDue } : { outcome: "nothing_due", nextDue };
+  }
+
+  let id = candidate.id;
+  if (!id) {
+    // Create it ahead of its Window. A concurrent request may have just done so; then we use that row.
+    await insertOccurrences(tx, { choreId: chore.id, householdId: req.householdId, now }, [planned!]);
+    const [row] = await tx`
+      SELECT id FROM occurrences
+      WHERE chore_id = ${chore.id} AND due_date = ${candidate.dueDate}::date AND COALESCE(time_slot, '') = ${timeSlot ?? ""}`;
+    id = row.id as string;
+  }
+  return completeTarget(c, req, { id, windowStart: candidate.windowStart, dueTime: candidate.dueTime, timeSlot });
+}
+
 async function completeInTx(
   tx: Db,
-  chore: { id: string; name: string; schedule: any },
+  chore: ChoreRow,
   timeZone: string,
   req: CompleteRequest,
   now: Date,
 ): Promise<CompleteResult> {
   const [target] = await tx`
-    SELECT id, due_time, time_slot FROM occurrences
+    SELECT id, window_start, due_time, time_slot FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' AND window_start <= ${now}
       AND (window_end IS NULL OR window_end > ${now})
     ORDER BY window_start LIMIT 1`;
 
   if (target) {
-    const late = isLate(now, { dueTime: target.due_time, timeSlot: target.time_slot });
-    const inserted = await tx`
-      INSERT INTO completions
-        (occurrence_id, household_id, completer_id, recorder_id, method, tag_id, completed_at, late)
-      VALUES (${target.id}, ${req.householdId}, ${req.completerId}, ${req.recorderId}, ${req.method},
-              ${req.tagId ?? null}, ${now}, ${late})
-      ON CONFLICT (occurrence_id) WHERE voided_at IS NULL DO NOTHING
-      RETURNING id`;
-    if (inserted.length > 0) {
-      await tx`UPDATE occurrences SET status = 'completed' WHERE id = ${target.id}`;
-      return {
-        outcome: "completed",
-        completion: (await loadSummary(tx, { completionId: inserted[0].id }))!,
-        nextDue: await nextDueJson(tx, chore, timeZone),
-      };
-    }
-    // Lost a race: a concurrent request completed this Occurrence first.
-    return {
-      outcome: "already_completed",
-      completion: (await loadSummary(tx, { occurrenceId: target.id }))!,
-      nextDue: await nextDueJson(tx, chore, timeZone),
-    };
+    return completeTarget({ tx, chore, timeZone, now }, req, {
+      id: target.id,
+      windowStart: target.window_start,
+      dueTime: target.due_time,
+      timeSlot: target.time_slot,
+    });
   }
 
   // Nothing Open is due: report the current Occurrence's Completion if it has one.
@@ -173,14 +274,24 @@ async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZon
   const [firstOpen] = await tx`
     SELECT due_date::text AS due_date, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' ORDER BY window_start LIMIT 1`;
-  const [last] = await tx`SELECT max(window_start) AS ws FROM occurrences WHERE chore_id = ${chore.id}`;
   const next = deriveNextDue(
     chore.schedule,
     timeZone,
     firstOpen ? { dueDate: firstOpen.due_date, dueTime: firstOpen.due_time } : null,
-    last?.ws ?? null,
+    await latestOccurrence(tx, chore.id),
   );
   return next ? { dueDate: next.dueDate, dueTime: next.dueTime.toISOString() } : null;
+}
+
+/** The Chore's latest stored Occurrence and its active Completion's time: where planning resumes. */
+async function latestOccurrence(tx: Db, choreId: string): Promise<LatestOccurrence> {
+  const [r] = await tx`
+    SELECT o.window_start, cp.completed_at
+    FROM occurrences o
+    LEFT JOIN completions cp ON cp.occurrence_id = o.id AND cp.voided_at IS NULL
+    WHERE o.chore_id = ${choreId}
+    ORDER BY o.window_start DESC LIMIT 1`;
+  return r ? { windowStart: r.window_start, completedAt: r.completed_at ?? null } : null;
 }
 
 /** The active Completion by id or by Occurrence. */
@@ -194,7 +305,7 @@ async function loadSummary(
     SELECT c.id, c.occurrence_id, o.chore_id, ch.name AS chore_name, o.due_date::text AS due_date, o.time_slot,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name,
-           c.method, c.tag_id, c.completed_at, c.late
+           c.method, c.tag_id, c.completed_at, c.late, c.early
     FROM completions c
     JOIN occurrences o ON o.id = c.occurrence_id
     JOIN chores ch ON ch.id = o.chore_id
@@ -218,5 +329,6 @@ async function loadSummary(
     tagId: r.tag_id,
     completedAt: new Date(r.completed_at).toISOString(),
     late: r.late,
+    early: r.early,
   };
 }

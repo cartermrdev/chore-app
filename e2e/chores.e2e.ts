@@ -17,8 +17,8 @@ test("an Admin creates a daily Chore and completes it from the chore list", asyn
   const row = page.getByRole("listitem").filter({ hasText: "Feed the cat" });
   await expect(row.getByText("Open")).toBeVisible();
 
-  await row.getByRole("button", { name: "Complete" }).click();
+  await row.getByRole("button", { name: "Complete", exact: true }).click();
 
   await expect(row.getByText("Completed by Robin")).toBeVisible();
-  await expect(row.getByRole("button", { name: "Complete" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Complete", exact: true })).toHaveCount(0);
 });

@@ -9,13 +9,17 @@
  *   3. no (non-archived) Chore  -> tag_unlinked
  *   4. Completion service       -> completed | already_completed | nothing_due
  * New outcomes (paused, tag_unregistered, unauthenticated) slot in as extra
- * steps and union members. Early and "complete anyway" completions are
- * separate explicit requests (a future `intent`), never implied by a scan.
+ * steps and union members. Early (and later "complete anyway") completions
+ * are separate explicit requests (`resolveEarlyScan`), never implied by a
+ * scan: a scan with nothing due only offers one (`earlyCompletionOffered`).
  */
 import type { Clock } from "../clock";
 import type { Db } from "../db/client";
 import {
   completeDueOccurrence,
+  completeEarly,
+  type CompleteRequest,
+  type CompleteResult,
   type CompletionSummary,
   type NextDueJson,
 } from "../completions/service";
@@ -34,7 +38,13 @@ export type ChoreRef = { id: string; name: string };
 
 export type ScanOutcome =
   | { outcome: "completed"; chore: ChoreRef; completion: CompletionSummary; nextDue: NextDueJson }
-  | { outcome: "already_completed"; chore: ChoreRef; completion: CompletionSummary; nextDue: NextDueJson }
+  | {
+      outcome: "already_completed";
+      chore: ChoreRef;
+      completion: CompletionSummary;
+      nextDue: NextDueJson;
+      earlyCompletionOffered: boolean;
+    }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: NextDueJson; earlyCompletionOffered: boolean }
   /** The Tag points at no Chore, or at an Archived one. */
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
@@ -43,7 +53,29 @@ export type ScanOutcome =
   /** No Tag has this id. */
   | { outcome: "tag_not_found" };
 
-export async function resolveScan(deps: { db: Db; clock: Clock }, req: ScanRequest): Promise<ScanOutcome> {
+export function resolveScan(deps: { db: Db; clock: Clock }, req: ScanRequest): Promise<ScanOutcome> {
+  return resolveTag(deps, req, (request) => completeDueOccurrence(deps, request));
+}
+
+/** The Occurrence the Person means to complete early: the `nextDue` the scan screen showed. */
+export type EarlyScanRequest = ScanRequest & { dueDate: string; timeSlot: string | null };
+
+/**
+ * "Complete early" on the scan screen: a separate, explicit request after a
+ * Scan found nothing due. Same Tag checks and outcomes as a Scan; records an
+ * Early Completion (Method NFC, this Tag) through the Completion service.
+ */
+export function resolveEarlyScan(deps: { db: Db; clock: Clock }, req: EarlyScanRequest): Promise<ScanOutcome> {
+  return resolveTag(deps, req, (request) =>
+    completeEarly(deps, { ...request, dueDate: req.dueDate, timeSlot: req.timeSlot }),
+  );
+}
+
+async function resolveTag(
+  deps: { db: Db; clock: Clock },
+  req: ScanRequest,
+  complete: (request: CompleteRequest) => Promise<CompleteResult>,
+): Promise<ScanOutcome> {
   const tag = await findTag(deps.db, req.tagId);
   if (!tag) return { outcome: "tag_not_found" };
 
@@ -53,7 +85,7 @@ export async function resolveScan(deps: { db: Db; clock: Clock }, req: ScanReque
   const unlinked = { outcome: "tag_unlinked", householdId: tag.householdId, canLink: membership.role === "admin" } as const;
   if (!tag.chore) return unlinked;
 
-  const result = await completeDueOccurrence(deps, {
+  const result = await complete({
     householdId: tag.householdId,
     choreId: tag.chore.id,
     completerId: req.personId,
@@ -63,12 +95,15 @@ export async function resolveScan(deps: { db: Db; clock: Clock }, req: ScanReque
     idempotencyKey: scanKey(req),
   });
   const chore = tag.chore;
+  // Nothing to do now: offer "Complete early" whenever there is a next Occurrence to complete.
+  const earlyCompletionOffered = "nextDue" in result && result.nextDue !== null;
   switch (result.outcome) {
     case "completed":
+      return { outcome: "completed", chore, completion: result.completion, nextDue: result.nextDue };
     case "already_completed":
-      return { outcome: result.outcome, chore, completion: result.completion, nextDue: result.nextDue };
+      return { outcome: "already_completed", chore, completion: result.completion, nextDue: result.nextDue, earlyCompletionOffered };
     case "nothing_due":
-      return { outcome: "nothing_due", chore, nextDue: result.nextDue, earlyCompletionOffered: false };
+      return { outcome: "nothing_due", chore, nextDue: result.nextDue, earlyCompletionOffered };
     case "chore_not_found":
       return unlinked; // archived or removed between the Tag lookup and the completion
     case "not_a_member":

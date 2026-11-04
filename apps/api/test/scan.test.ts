@@ -63,6 +63,7 @@ describe("Scan", () => {
       chore: { id: h.chore.id, name: "Dishes" },
       completion: first.completion,
       nextDue: { dueDate: "2026-03-02", dueTime: "2026-03-03T00:00:00.000Z" },
+      earlyCompletionOffered: true,
     });
     expect((await h.detail()).occurrences).toHaveLength(1);
   });
@@ -77,7 +78,7 @@ describe("Scan", () => {
       outcome: "nothing_due",
       chore: { id: h.chore.id, name: "Dishes" },
       nextDue: { dueDate: "2026-03-05", dueTime: "2026-03-06T00:00:00.000Z" },
-      earlyCompletionOffered: false,
+      earlyCompletionOffered: true,
     });
   });
 

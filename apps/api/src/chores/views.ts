@@ -17,6 +17,8 @@ export type CompletionView = {
   tagId: string | null;
   completedAt: Date;
   late: boolean;
+  /** An Early Completion: recorded before the Occurrence was due. */
+  early: boolean;
 };
 
 export type OccurrenceView = {
@@ -35,7 +37,7 @@ export type ChoreView = {
   id: string;
   name: string;
   schedule: Schedule;
-  /** The earliest Open Occurrence whose Window has opened, else the latest opened one. */
+  /** The earliest Open Occurrence whose Window has opened, else the latest opened or Early-Completed one. */
   currentOccurrence: OccurrenceView | null;
   /** The earliest Open Occurrence, else the next one the Schedule will create. */
   nextDue: NextDue | null;
@@ -73,14 +75,18 @@ export async function getChore({ db, membership, now }: Scope, choreId: string):
 }
 
 function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: string })[], timeZone: string, now: Date): ChoreView {
-  const opened = occurrences.filter((o) => o.windowStart <= now).map(({ choreId: _, ...o }) => o);
+  // Opened Occurrences, plus any completed ahead of their Window (Early Completions).
+  const opened = occurrences
+    .filter((o) => o.windowStart <= now || o.completion !== null)
+    .map(({ choreId: _, ...o }) => o);
   const currentOccurrence = opened.find((o) => o.status === "open") ?? opened.at(-1) ?? null;
 
+  const latest = occurrences.at(-1);
   const nextDue = deriveNextDue(
     chore.schedule,
     timeZone,
     occurrences.find((o) => o.status === "open") ?? null,
-    occurrences.at(-1)?.windowStart ?? null,
+    latest ? { windowStart: latest.windowStart, completedAt: latest.completion?.completedAt ?? null } : null,
   );
   return { id: chore.id, name: chore.name, schedule: chore.schedule, currentOccurrence, nextDue };
 }
@@ -89,7 +95,7 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
   const rows = await db`
     SELECT o.id, o.chore_id, o.due_date::text AS due_date, o.time_slot, o.window_start, o.due_time,
            o.window_end, o.status,
-           c.id AS completion_id, c.method, c.tag_id, c.completed_at, c.late,
+           c.id AS completion_id, c.method, c.tag_id, c.completed_at, c.late, c.early,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name
     FROM occurrences o
@@ -116,6 +122,7 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
           tagId: r.tag_id,
           completedAt: r.completed_at,
           late: r.late,
+          early: r.early,
         }
       : null,
   })) as (OccurrenceView & { choreId: string })[];
