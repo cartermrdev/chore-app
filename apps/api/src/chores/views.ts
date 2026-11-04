@@ -41,7 +41,8 @@ export type ChoreView = {
   nextDue: NextDue | null;
 };
 
-export type ChoreDetailView = ChoreView & { occurrences: OccurrenceView[] };
+/** `archivedAt` is null for an active Chore; an Archived Chore keeps its history readable here. */
+export type ChoreDetailView = ChoreView & { archivedAt: Date | null; occurrences: OccurrenceView[] };
 
 type Scope = { db: Db; membership: CurrentMembership; now: Date };
 
@@ -61,13 +62,14 @@ export async function listChores({ db, membership, now }: Scope): Promise<ChoreV
 /** One Chore in the Household with all its Occurrences, or null. */
 export async function getChore({ db, membership, now }: Scope, choreId: string): Promise<ChoreDetailView | null> {
   const [chore] = await db`
-    SELECT id, name, schedule FROM chores
+    SELECT id, name, schedule, archived_at FROM chores
     WHERE household_id = ${membership.householdId} AND id = ${choreId}::uuid`.catch(() => []);
   if (!chore) return null;
   await materialise(db, { householdId: membership.householdId, timeZone: membership.timeZone, now, choreId });
   const occurrences = await loadOccurrences(db, membership.householdId, choreId);
   return {
     ...toChoreView(chore, occurrences, membership.timeZone, now),
+    archivedAt: chore.archived_at,
     occurrences: occurrences.map(({ choreId: _, ...o }) => o),
   };
 }

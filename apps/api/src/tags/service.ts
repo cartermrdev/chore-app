@@ -13,6 +13,16 @@ export function newTagId(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(TAG_ID_BYTES))).toString("base64url");
 }
 
+/**
+ * Whether a string could be a Tag ID: URL-safe (base64url alphabet) and long
+ * enough to carry at least 128 bits. Generated IDs are 24 characters; IDs
+ * written onto Tags by other means (an Unregistered Tag) may be up to 64.
+ * Distinguishes an Unregistered Tag (well-formed, never seen) from garbage.
+ */
+export function isWellFormedTagId(tagId: string): boolean {
+  return /^[A-Za-z0-9_-]{22,64}$/.test(tagId);
+}
+
 /** The path written onto a physical Tag. Frozen by ADR 0001. */
 export function tagPath(tagId: string): string {
   return `/nfc/${tagId}`;
@@ -71,6 +81,33 @@ export async function createTag(
   return { ok: true, tag: (await viewOf(db, input.householdId, id))! };
 }
 
+export type ClaimResult =
+  | { ok: true; tag: TagView }
+  | { ok: false; error: "malformed_tag_id" | "already_registered" | "chore_not_found" };
+
+/**
+ * Registers an Unregistered Tag (a well-formed ID nobody has registered yet)
+ * to the Household under the scanned ID, pointing at a Chore or none. A Tag
+ * that already exists, in any Household, is never taken over.
+ */
+export async function claimTag(
+  deps: { db: Db; clock: Clock },
+  input: { householdId: string; tagId: string; claimedBy: string; choreId: string | null },
+): Promise<ClaimResult> {
+  const { db, clock } = deps;
+  if (!isWellFormedTagId(input.tagId)) return { ok: false, error: "malformed_tag_id" };
+  if (input.choreId && !(await choreInHousehold(db, input.householdId, input.choreId))) {
+    return { ok: false, error: "chore_not_found" };
+  }
+  const inserted = await db`
+    INSERT INTO tags (id, household_id, chore_id, created_at, created_by)
+    VALUES (${input.tagId}, ${input.householdId}, ${input.choreId}, ${clock.now()}, ${input.claimedBy})
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id`;
+  if (inserted.length === 0) return { ok: false, error: "already_registered" };
+  return { ok: true, tag: (await viewOf(db, input.householdId, input.tagId))! };
+}
+
 /** Points the Tag at a Chore of the same Household, or at none. */
 export async function linkTag(
   db: Db,
@@ -85,6 +122,30 @@ export async function linkTag(
     RETURNING id`;
   if (updated.length === 0) return { ok: false, error: "tag_not_found" };
   return { ok: true, tag: (await viewOf(db, input.householdId, input.tagId))! };
+}
+
+/**
+ * Hard-deletes a Tag that no Completion records. A Tag with history stays
+ * (unlink it instead). A deleted Tag's ID is no longer known, so scanning it
+ * again reports it as Unregistered.
+ */
+export async function deleteTag(
+  db: Db,
+  input: { householdId: string; tagId: string },
+): Promise<{ ok: true } | { ok: false; error: "not_found" | "has_history" }> {
+  const [tag] = await db`SELECT id FROM tags WHERE id = ${input.tagId} AND household_id = ${input.householdId}`;
+  if (!tag) return { ok: false, error: "not_found" };
+  try {
+    const deleted = await db`
+      DELETE FROM tags
+      WHERE id = ${tag.id} AND NOT EXISTS (SELECT 1 FROM completions WHERE tag_id = ${tag.id})
+      RETURNING id`;
+    return deleted.length > 0 ? { ok: true } : { ok: false, error: "has_history" };
+  } catch (e) {
+    const err = e as { errno?: string; code?: string };
+    if (err?.errno === "23503" || err?.code === "23503") return { ok: false, error: "has_history" };
+    throw e;
+  }
 }
 
 async function choreInHousehold(db: Db, householdId: string, choreId: string): Promise<boolean> {

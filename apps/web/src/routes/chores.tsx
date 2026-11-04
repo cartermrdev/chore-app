@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { api, type Chore, type CompleteResult } from "../api";
+import { api, ApiError, type Chore, type CompleteResult } from "../api";
 
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
 
@@ -19,13 +19,13 @@ export function ChoreList({ householdId, isAdmin }: { householdId: string; isAdm
       {chores.error && <p role="alert">Could not load chores.</p>}
       {chores.data && chores.data.chores.length === 0 && <p>No chores yet.</p>}
       <ul>
-        {chores.data?.chores.map((chore) => <ChoreRow key={chore.id} householdId={householdId} chore={chore} />)}
+        {chores.data?.chores.map((chore) => <ChoreRow key={chore.id} householdId={householdId} chore={chore} isAdmin={isAdmin} />)}
       </ul>
     </section>
   );
 }
 
-function ChoreRow({ householdId, chore }: { householdId: string; chore: Chore }) {
+function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore: Chore; isAdmin: boolean }) {
   const queryClient = useQueryClient();
   // One key per press of the button, reused if the request is retried.
   const key = useRef<string | null>(null);
@@ -63,7 +63,50 @@ function ChoreRow({ householdId, chore }: { householdId: string; chore: Chore })
         </button>
       )}
       {complete.error && <span role="alert"> Could not complete. Try again.</span>}
+      {isAdmin && <ChoreAdminActions householdId={householdId} chore={chore} />}
     </li>
+  );
+}
+
+/**
+ * Admin-only: Archive (always allowed; keeps history and unlinks the Chore's
+ * Tags) and Delete (only for a Chore with no history; the API answers 409
+ * otherwise).
+ */
+function ChoreAdminActions({ householdId, chore }: { householdId: string; chore: Chore }) {
+  const queryClient = useQueryClient();
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["chores", householdId] }),
+      queryClient.invalidateQueries({ queryKey: ["tags", householdId] }),
+    ]);
+  const archive = useMutation({
+    mutationFn: () => api(`/households/${householdId}/chores/${chore.id}/archive`, { method: "POST" }),
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/households/${householdId}/chores/${chore.id}`, { method: "DELETE" }),
+    onSuccess: refresh,
+  });
+  const busy = archive.isPending || remove.isPending;
+  return (
+    <>
+      {" "}
+      <button type="button" disabled={busy} onClick={() => archive.mutate()}>
+        Archive
+      </button>{" "}
+      <button type="button" disabled={busy} onClick={() => remove.mutate()}>
+        Delete
+      </button>
+      {archive.error && <span role="alert"> Could not archive.</span>}
+      {remove.error && (
+        <span role="alert">
+          {remove.error instanceof ApiError && remove.error.status === 409
+            ? " This chore has history, so it can only be archived."
+            : " Could not delete."}
+        </span>
+      )}
+    </>
   );
 }
 

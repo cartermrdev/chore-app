@@ -39,9 +39,9 @@ apps/api            Bun + Hono + PostgreSQL backend
   src/households/membership.ts  requireMembership / requireAdmin for /households/:householdId routes
   src/schedule/       Schedule engine (pure, no I/O), calendar maths, table-driven tests
   src/occurrences/    Occurrence materialiser (lazy, idempotent; marks Missed)
-  src/chores/         Chore routes and read model (current Occurrence, next due)
+  src/chores/         Chore routes, read model (current Occurrence, next due), Archive and delete
   src/completions/    Completion service: the single path that creates a Completion
-  src/tags/           Tag service and Admin routes (random ids, link/re-point to a Chore)
+  src/tags/           Tag service and Admin routes (random ids, link/re-point, claim, delete)
   src/scan/           Scan resolver and POST /api/scan/:tagId (the /nfc/{tagId} page's request)
   src/testing/        test-only /api/test/* endpoints
   scripts/            seed and migrate CLIs
