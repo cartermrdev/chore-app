@@ -4,7 +4,7 @@ import { assertValidConfig, publicOrigin, type Config } from "./config";
 import type { Db } from "./db/client";
 import { testRoutes } from "./testing/routes";
 import { householdRoutes, meRoutes } from "./households/routes";
-import type { CurrentMembership } from "./households/membership";
+import type { CurrentMembership } from "./households/access";
 import { choreRoutes } from "./chores/routes";
 import { tagRoutes } from "./tags/routes";
 import { scanRoutes } from "./scan/routes";

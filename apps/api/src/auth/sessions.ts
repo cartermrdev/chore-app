@@ -33,12 +33,12 @@ export async function startSession(c: Context<AppEnv>, personId: string): Promis
 }
 
 /**
- * Resolves the session cookie to `c.var.personId`, extending the session
- * with use. Responds 401 when there is no valid session.
+ * The signed-in Person from the session cookie, extending the session with
+ * use; null when there is no valid session.
  */
-export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+export async function sessionPersonId(c: Context<AppEnv>): Promise<string | null> {
   const token = getCookie(c, SESSION_COOKIE);
-  if (!token) return c.json({ error: "unauthenticated" }, 401);
+  if (!token) return null;
 
   const { db, clock } = c.var.deps;
   const now = clock.now();
@@ -47,9 +47,16 @@ export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
     UPDATE sessions SET expires_at = ${newExpiry}
     WHERE token_hash = ${hashToken(token)} AND expires_at > ${now}
     RETURNING person_id`;
-  const row = rows[0];
-  if (!row) return c.json({ error: "unauthenticated" }, 401);
+  return rows[0]?.person_id ?? null;
+}
 
-  c.set("personId", row.person_id);
+/**
+ * Resolves the session cookie to `c.var.personId`, extending the session
+ * with use. Responds 401 when there is no valid session.
+ */
+export const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const personId = await sessionPersonId(c);
+  if (!personId) return c.json({ error: "unauthenticated" }, 401);
+  c.set("personId", personId);
   await next();
 };

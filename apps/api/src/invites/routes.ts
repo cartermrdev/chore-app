@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession, startSession } from "../auth/sessions";
-import { requireAdmin, requireMembership } from "../households/membership";
+import { requireAdmin, requireMembership } from "../households/access";
 import { acceptInvite, beginInvite, createInvite, describeInvite, joinWithInvite } from "./service";
 
 /**

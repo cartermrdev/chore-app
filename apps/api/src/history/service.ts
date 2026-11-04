@@ -6,7 +6,7 @@
  * Materialises first, so Missed and Pause-Skipped outcomes are up to date.
  */
 import type { Db } from "../db/client";
-import type { CurrentMembership } from "../households/membership";
+import type { CurrentMembership } from "../households/access";
 import { materialise } from "../occurrences/materialise";
 import { addDays, startOfLocalDay, type LocalDate } from "../schedule/calendar";
 import { personRef, type PersonRef } from "../chores/views";

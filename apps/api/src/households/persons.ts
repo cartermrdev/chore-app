@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
-import { requireAdmin, requireMembership, type Role } from "./membership";
-import { changeRole, endMembership, type MembershipError } from "./memberships";
+import { requireAdmin, requireMembership, type Role } from "./access";
+import { changeRole, endMembership, type MembershipError } from "./membership-changes";
 
 const STATUS = { not_found: 404, forbidden: 403, last_admin: 409 } as const satisfies Record<MembershipError, number>;
 

@@ -18,7 +18,7 @@
  */
 import type { Clock } from "../clock";
 import type { Db } from "../db/client";
-import { findMembership } from "../households/membership";
+import { findMembership } from "../households/access";
 import { isLocalDate } from "../schedule/calendar";
 import { loadChorePauses } from "../pauses/service";
 import {
@@ -77,8 +77,11 @@ export type CompleteResult =
   | { outcome: "already_completed"; completion: CompletionSummary; nextDue: NextDueJson }
   /** No Occurrence is due now and the current one (if any) was not completed. */
   | { outcome: "nothing_due"; nextDue: NextDueJson }
-  /** Completer or Recorder lacks a current Membership, or a non-Admin recorded for someone else. */
+  /** The Recorder lacks a current Membership in the Household. */
   | { outcome: "not_a_member" }
+  /** A Completer other than the Recorder lacks a current Membership there. */
+  | { outcome: "completer_not_in_household" }
+  /** A non-Admin recorded for someone else. */
   | { outcome: "forbidden" }
   /** No such non-archived Chore in that Household. */
   | { outcome: "chore_not_found" };
@@ -118,6 +121,12 @@ export function completeEarly(deps: { db: Db; clock: Clock }, req: EarlyRequest)
   return runCompletion(deps, req, `early:${req.idempotencyKey}`, (c) => completeEarlyInTx(c, req));
 }
 
+/** The client-generated idempotency key from an untrusted request body; null if missing or malformed. */
+export function idempotencyKeyOf(body: any): string | null {
+  const key = body?.idempotencyKey;
+  return typeof key === "string" && key.length >= 1 && key.length <= 200 ? key : null;
+}
+
 /** Validates the Occurrence an untrusted early request names; null if invalid. */
 export function parseEarlyTarget(body: any): { dueDate: string; timeSlot: string | null } | null {
   if (!isLocalDate(body?.dueDate)) return null;
@@ -143,7 +152,8 @@ async function runCompletion(
     findMembership(db, req.householdId, req.completerId),
     findMembership(db, req.householdId, req.recorderId),
   ]);
-  if (!completer || !recorder) return { outcome: "not_a_member" };
+  if (!recorder) return { outcome: "not_a_member" };
+  if (!completer) return { outcome: "completer_not_in_household" };
   if (req.completerId !== req.recorderId && recorder.role !== "admin") return { outcome: "forbidden" };
 
   const [chore] = await db`

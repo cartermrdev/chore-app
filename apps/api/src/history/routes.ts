@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
-import { requireMembership } from "../households/membership";
+import { requireMembership } from "../households/access";
 import { addDays, compareDates, daysBetween, isLocalDate, localDateOf } from "../schedule/calendar";
 import { historyPersons, householdHistory, personHistory, type DateRange } from "./service";
 

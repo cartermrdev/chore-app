@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
-import { requireAdmin, requireMembership } from "../households/membership";
+import { requireAdmin, requireMembership } from "../households/access";
 import { claimTag, createTag, deleteTag, linkTag, listTags, type LinkResult } from "./service";
 
 /** /api/households/:householdId/tags (Admin only). */

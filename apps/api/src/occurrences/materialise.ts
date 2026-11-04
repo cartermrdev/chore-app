@@ -18,6 +18,7 @@
 import type { Db } from "../db/client";
 import { nextOccurrence, occurrencesUpTo, type Pause, type PlannedOccurrence, type Schedule } from "../schedule/engine";
 import { loadPauses, pausesFor } from "../pauses/service";
+import { currentPersonIds } from "../households/access";
 
 export type MaterialiseScope = {
   householdId: string;
@@ -47,7 +48,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
     WHERE c.household_id = ${householdId} AND c.archived_at IS NULL
       AND (${choreId}::uuid IS NULL OR c.id = ${choreId}::uuid)`;
 
-  let members: Set<string> | undefined;
+  let current: Set<string> | undefined;
   const pauses = chores.length > 0 ? await loadPauses(db, householdId) : [];
   for (const chore of chores) {
     const planned = occurrencesUpTo({
@@ -59,10 +60,10 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       horizon: now,
     });
     if (planned.length === 0) continue;
-    members ??= await currentMembers(db, householdId);
+    current ??= await currentPersonIds(db, householdId);
     await insertOccurrences(
       db,
-      { chore: { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id }, householdId, now, members },
+      { chore: { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id }, householdId, now, currentPersons: current },
       planned,
     );
   }
@@ -123,14 +124,14 @@ export async function insertOccurrences(
     chore: { id: string; schedule: Schedule; assigneeId: string | null };
     householdId: string;
     now: Date;
-    /** Current Members of the Household, if the caller already has them. */
-    members?: Set<string>;
+    /** The Household's Persons with a current Membership, if the caller already has them. */
+    currentPersons?: Set<string>;
   },
   planned: PlannedOccurrence[],
 ): Promise<void> {
   if (planned.length === 0) return;
   const { chore, householdId, now } = scope;
-  const members = scope.members ?? (await currentMembers(db, householdId));
+  const current = scope.currentPersons ?? (await currentPersonIds(db, householdId));
   const rows = planned.map((p) => {
     const assignee = assigneeFor(chore.schedule, chore.assigneeId, p.timeSlot);
     return {
@@ -142,7 +143,7 @@ export async function insertOccurrences(
       due_time: p.dueTime,
       window_end: p.windowEnd,
       // An Assignee whose Membership has since ended is not copied.
-      assignee_id: assignee && members.has(assignee) ? assignee : null,
+      assignee_id: assignee && current.has(assignee) ? assignee : null,
       status: "open",
       created_at: now,
     };
@@ -159,12 +160,6 @@ export function assigneeFor(schedule: Schedule, choreAssigneeId: string | null, 
     return schedule.slots.find((s) => s.name === timeSlot)?.assigneeId ?? null;
   }
   return choreAssigneeId;
-}
-
-async function currentMembers(db: Db, householdId: string): Promise<Set<string>> {
-  const rows = await db`
-    SELECT person_id FROM memberships WHERE household_id = ${householdId} AND ended_at IS NULL`;
-  return new Set(rows.map((r: any) => r.person_id as string));
 }
 
 export type StoredWindow = { windowStart: Date; windowEnd: Date | null };

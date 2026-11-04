@@ -3,7 +3,7 @@
  * is next due. Materialises first, so reads always see up-to-date Occurrences.
  */
 import type { Db } from "../db/client";
-import type { CurrentMembership } from "../households/membership";
+import type { CurrentMembership } from "../households/access";
 import { deriveEarlyTarget, deriveNextDue, materialise, type NextDue } from "../occurrences/materialise";
 import { pausedThrough, type Pause, type Schedule } from "../schedule/engine";
 import { localDateOf, type LocalDate } from "../schedule/calendar";

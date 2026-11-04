@@ -16,7 +16,7 @@
  */
 import type { Clock } from "../clock";
 import type { Db } from "../db/client";
-import { findMembership } from "../households/membership";
+import { findMembership } from "../households/access";
 
 /** How long the Completer can Undo their own Completion. */
 export const UNDO_WINDOW_MS = 5 * 60_000;

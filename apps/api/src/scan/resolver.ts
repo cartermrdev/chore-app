@@ -1,10 +1,12 @@
 /**
  * Scan resolver: turns a Scan (a Person opening /nfc/{tagId}) into exactly
- * one outcome. It finds the Household from the Tag (ADR 0002) and completes
- * through the Completion service, never directly.
+ * one of the spec's eight outcomes. It finds the Household from the Tag (ADR
+ * 0002) and completes through the Completion service, never directly.
  *
- * The checks run in order, each returning early:
- *   1. unknown Tag              -> tag_unregistered (well-formed id) | tag_not_found (malformed)
+ * The Tag ID must be well-formed (the route answers 404 for a malformed one,
+ * which cannot be a Tag at all). The checks run in order, each returning early:
+ *   0. no session               -> unauthenticated
+ *   1. unknown Tag              -> tag_unregistered
  *   2. no current Membership    -> not_a_member (names nothing)
  *   3. no (non-archived) Chore  -> tag_unlinked
  *   4. Chore paused today       -> paused (Scan only; records nothing)
@@ -26,14 +28,15 @@ import {
   type NextDueJson,
 } from "../completions/service";
 import { undoRemainingMs } from "../completions/corrections";
-import { findMembership } from "../households/membership";
-import { findTag, isWellFormedTagId } from "../tags/service";
+import { findMembership } from "../households/access";
+import { findTag } from "../tags/service";
 import { pausedUntil } from "../pauses/service";
 
 export type ScanRequest = {
+  /** A well-formed Tag ID (see tags/service `isWellFormedTagId`). */
   tagId: string;
-  /** The signed-in Person: both Completer and Recorder. */
-  personId: string;
+  /** The signed-in Person, both Completer and Recorder; null without a session. */
+  personId: string | null;
   /** Client-generated, stable across retries of the same Scan. */
   idempotencyKey: string;
 };
@@ -74,8 +77,8 @@ export type ScanOutcome =
    * may claim it for; `canClaim` is true when there is at least one.
    */
   | { outcome: "tag_unregistered"; canClaim: boolean; households: HouseholdRef[] }
-  /** The id is malformed, so it cannot be a Tag at all (the route returns 404). */
-  | { outcome: "tag_not_found" };
+  /** No session: sign in, then the scan page resends the same request. */
+  | { outcome: "unauthenticated" };
 
 export type HouseholdRef = { id: string; name: string };
 
@@ -107,14 +110,16 @@ async function resolveTag(
   complete: (request: CompleteRequest) => Promise<CompleteResult>,
   opts: { checkPause: boolean },
 ): Promise<ScanOutcome> {
+  const { personId } = req;
+  if (!personId) return { outcome: "unauthenticated" };
+
   const tag = await findTag(deps.db, req.tagId);
   if (!tag) {
-    if (!isWellFormedTagId(req.tagId)) return { outcome: "tag_not_found" };
-    const households = await adminHouseholds(deps.db, req.personId);
+    const households = await adminHouseholds(deps.db, personId);
     return { outcome: "tag_unregistered", canClaim: households.length > 0, households };
   }
 
-  const membership = await findMembership(deps.db, tag.householdId, req.personId);
+  const membership = await findMembership(deps.db, tag.householdId, personId);
   if (!membership) return { outcome: "not_a_member" };
 
   const unlinked = { outcome: "tag_unlinked", householdId: tag.householdId, canLink: membership.role === "admin" } as const;
@@ -132,8 +137,8 @@ async function resolveTag(
   const result = await complete({
     householdId: tag.householdId,
     choreId: tag.chore.id,
-    completerId: req.personId,
-    recorderId: req.personId,
+    completerId: personId,
+    recorderId: personId,
     method: "nfc",
     tagId: tag.id,
     idempotencyKey: scanKey(req),
@@ -157,7 +162,8 @@ async function resolveTag(
       return { outcome: "nothing_due", chore, nextDue: result.nextDue, earlyCompletionOffered };
     case "chore_not_found":
       return unlinked; // archived or removed between the Tag lookup and the completion
-    case "not_a_member":
+    case "not_a_member": // the Membership ended between our check and the completion
+    case "completer_not_in_household": // cannot happen: Completer = Recorder
     case "forbidden": // cannot happen: Completer = Recorder
       return { outcome: "not_a_member" };
   }
@@ -176,6 +182,6 @@ async function adminHouseholds(db: Db, personId: string): Promise<HouseholdRef[]
  * Idempotency keys are scoped per Recorder by the Completion service. Prefix
  * scan keys so a scan can never replay a Manual request's stored result.
  */
-function scanKey(req: ScanRequest): string {
+function scanKey(req: Pick<ScanRequest, "tagId" | "idempotencyKey">): string {
   return `scan:${req.tagId}:${req.idempotencyKey}`;
 }

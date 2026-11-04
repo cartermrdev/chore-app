@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
-import { requireAdmin, requireMembership } from "../households/membership";
+import { requireAdmin, requireMembership } from "../households/access";
 import { localDateOf } from "../schedule/calendar";
 import { createPause, endPauseEarly, listPauses } from "./service";
 

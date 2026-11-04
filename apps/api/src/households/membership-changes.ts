@@ -8,7 +8,7 @@
  */
 import type { Deps } from "../app";
 import type { Db } from "../db/client";
-import type { Role } from "./membership";
+import { findMembership, type Role } from "./access";
 
 export type MembershipPerson = { id: string; displayName: string; role: Role };
 export type MembershipError = "not_found" | "forbidden" | "last_admin";
@@ -28,9 +28,7 @@ async function lockMembership(
 ): Promise<Locked | "forbidden" | null> {
   const { householdId, personId, actorId } = input;
   await tx`SELECT id FROM households WHERE id = ${householdId} FOR UPDATE`;
-  const [actor] = await tx`
-    SELECT role FROM memberships
-    WHERE household_id = ${householdId} AND person_id = ${actorId} AND ended_at IS NULL`;
+  const actor = await findMembership(tx, householdId, actorId);
   if (actor?.role !== "admin") return "forbidden";
   if (!UUID.test(personId)) return null;
   const [row] = await tx`

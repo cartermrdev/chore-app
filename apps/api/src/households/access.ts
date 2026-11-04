@@ -1,3 +1,7 @@
+/**
+ * Access to a Household: who has a current Membership there, and the route
+ * guards built on it. Changing Memberships lives in membership-changes.ts.
+ */
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv } from "../app";
 import type { Db } from "../db/client";
@@ -24,14 +28,17 @@ export async function findMembership(db: Db, householdId: string, personId: stri
   return { householdId, personId, role: row.role, timeZone: row.time_zone };
 }
 
-/** Which of the given Person ids have a current Membership in the Household (malformed ids never do). */
-export async function currentMemberIds(db: Db, householdId: string, personIds: string[]): Promise<Set<string>> {
-  if (personIds.length === 0) return new Set();
+/**
+ * The Persons with a current Membership in the Household: all of them, or
+ * only those among `personIds` (malformed ids never match).
+ */
+export async function currentPersonIds(db: Db, householdId: string, personIds?: string[]): Promise<Set<string>> {
+  if (personIds?.length === 0) return new Set();
   const rows = await db`
     SELECT person_id::text FROM memberships
     WHERE household_id = ${householdId}::uuid AND ended_at IS NULL
-      AND person_id::text IN ${db(personIds)}`;
-  return new Set(rows.map((r: any) => r.person_id));
+      ${personIds ? db`AND person_id::text IN ${db(personIds)}` : db``}`;
+  return new Set(rows.map((r: any) => r.person_id as string));
 }
 
 /**

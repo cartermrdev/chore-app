@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
 import { normaliseEmail } from "../auth/magic-links";
-import { requireAdmin, requireMembership } from "./membership";
+import { requireAdmin, requireMembership } from "./access";
 import { isValidTimeZone } from "./seed";
 
 /**

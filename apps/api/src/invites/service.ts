@@ -9,7 +9,7 @@
  */
 import { durationMs } from "../clock";
 import type { Deps } from "../app";
-import type { Role } from "../households/membership";
+import type { Role } from "../households/access";
 import { savePasskey, storeChallenge, takeChallenge, type Ceremony } from "../auth/passkeys";
 import { hashToken, newToken } from "../auth/tokens";
 
