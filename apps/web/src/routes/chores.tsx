@@ -83,6 +83,8 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
   const nameOf = (id: string) => members.find((m) => m.id === id)?.displayName;
   const occ = chore.currentOccurrence;
   const nextDue = chore.nextDue;
+  // What "Complete early"/"Complete anyway" names; under an indefinite Pause there is no nextDue but still a target.
+  const earlyTarget = chore.paused ? chore.paused.completeAnyway : nextDue;
   const hasSlots = chore.schedule.kind === "fixed" && Boolean(chore.schedule.slots?.length);
   // The current Occurrence's Assignee, else (before any Occurrence) the Chore's.
   const assignee = occ ? occ.assignee : hasSlots ? null : chore.assignee;
@@ -126,11 +128,11 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
           Complete
         </button>
       ) : (
-        nextDue && (
+        earlyTarget && (
           <button
             type="button"
             disabled={completeEarly.isPending}
-            onClick={() => completeEarly.mutate(nextDue)}
+            onClick={() => completeEarly.mutate(earlyTarget)}
           >
             {chore.paused ? "Complete anyway" : "Complete early"}
           </button>

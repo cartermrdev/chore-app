@@ -19,7 +19,7 @@ import type { Db } from "../db/client";
 import {
   completeDueOccurrence,
   completeEarly,
-  nextDueFor,
+  completeAnywayTarget,
   type CompleteRequest,
   type CompleteResult,
   type CompletionSummary,
@@ -51,8 +51,9 @@ export type ScanOutcome =
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: NextDueJson; earlyCompletionOffered: boolean }
   /**
    * A Chore or Household Pause covers today. `until` is the last paused date
-   * (null: indefinite); `nextDue` is the next Occurrence that will fall due,
-   * which "Complete anyway" (POST /api/scan/:tagId/complete-early) names.
+   * (null: indefinite); `nextDue` is the Occurrence "Complete anyway" (POST
+   * /api/scan/:tagId/complete-early) names: the next that will fall due, or
+   * under an indefinite Pause the next one ignoring the Pause.
    */
   | {
       outcome: "paused";
@@ -121,7 +122,7 @@ async function resolveTag(
     const scope = { householdId: tag.householdId, choreId: tag.chore.id, timeZone: membership.timeZone };
     const until = await pausedUntil(deps.db, { ...scope, now: deps.clock.now() });
     if (until !== undefined) {
-      const nextDue = await nextDueFor(deps, scope);
+      const nextDue = await completeAnywayTarget(deps, scope);
       return { outcome: "paused", chore: tag.chore, until, nextDue, completeAnywayOffered: nextDue !== null };
     }
   }

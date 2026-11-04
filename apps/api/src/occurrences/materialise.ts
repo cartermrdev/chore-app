@@ -244,6 +244,39 @@ export function planNext(
 }
 
 /**
+ * The Occurrence an Early Completion ("Complete early" / "Complete anyway")
+ * records on when none is Open: the next that will fall due (`planNext`), or,
+ * while an indefinite Pause hides every future Occurrence, the next one the
+ * Schedule would create ignoring Pauses. `pauses` is what it was planned
+ * with, for `planThrough` to create it consistently.
+ */
+export function planEarlyTarget(
+  schedule: Schedule,
+  timeZone: string,
+  latest: LatestOccurrence,
+  pauses: Pause[],
+): { next: PlannedOccurrence; pauses: Pause[] } | null {
+  const next = planNext(schedule, timeZone, latest, pauses);
+  if (next) return { next, pauses };
+  // Only an indefinite Pause can make planNext null where ignoring Pauses is not.
+  const ignoringPauses = planNext(schedule, timeZone, latest, []);
+  return ignoringPauses && { next: ignoringPauses, pauses: [] };
+}
+
+/** `deriveNextDue`, but for an Early Completion's target (see `planEarlyTarget`). */
+export function deriveEarlyTarget(
+  schedule: Schedule,
+  timeZone: string,
+  firstOpen: NextDue | null,
+  latest: LatestOccurrence,
+  pauses: Pause[],
+): NextDue | null {
+  if (firstOpen) return { dueDate: firstOpen.dueDate, timeSlot: firstOpen.timeSlot, dueTime: firstOpen.dueTime };
+  const target = planEarlyTarget(schedule, timeZone, latest, pauses);
+  return target ? { dueDate: target.next.dueDate, timeSlot: target.next.timeSlot, dueTime: target.next.dueTime } : null;
+}
+
+/**
  * Every Occurrence the Schedule creates after the latest stored one, up to
  * and including `through` (by Window start), Pause-covered Fixed ones included.
  */

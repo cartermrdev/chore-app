@@ -267,17 +267,56 @@ describe("Pauses", () => {
       expect(await h.statuses()).toEqual([["2026-03-01", "skipped"]]);
     });
 
-    test("an indefinite Household Pause shows no end date, and nothing to complete anyway", async () => {
+    test("an indefinite Household Pause shows no end date, and offers Complete anyway on the next Occurrence ignoring the Pause", async () => {
       t.clock.set("2026-03-01T09:00:00Z");
       const h = await withTag();
       await h.pause({});
 
-      expect(await (await h.scan(h.standard, "s1")).json()).toMatchObject({
+      const paused = await (await h.scan(h.standard, "s1")).json();
+
+      expect(paused).toMatchObject({
         outcome: "paused",
         until: null,
-        nextDue: null,
-        completeAnywayOffered: false,
+        nextDue: { dueDate: "2026-03-02", timeSlot: null },
+        completeAnywayOffered: true,
       });
+      const res = await h.standard.post(`/api/scan/${h.tag.id}/complete-early`, {
+        idempotencyKey: "e1",
+        dueDate: paused.nextDue.dueDate,
+        timeSlot: paused.nextDue.timeSlot,
+      });
+      expect(await res.json()).toMatchObject({
+        outcome: "completed",
+        completion: { dueDate: "2026-03-02", early: true, method: "nfc" },
+      });
+      t.clock.set("2026-03-03T09:00:00Z");
+      expect(await h.statuses()).toEqual([
+        ["2026-03-01", "skipped"],
+        ["2026-03-02", "completed"],
+        ["2026-03-03", "skipped"],
+      ]);
+    });
+
+    test("an indefinite Pause still offers Complete anyway in the app, and ending the Pause keeps that Completion", async () => {
+      t.clock.set("2026-03-01T09:00:00Z");
+      const h = await household();
+      const pause = await (await h.pause({ choreId: h.chore.id })).json();
+
+      const chore = await h.detail();
+      expect(chore.nextDue).toBeNull();
+      expect(chore.paused).toEqual({ until: null, completeAnyway: expect.objectContaining({ dueDate: "2026-03-02", timeSlot: null }) });
+      const res = await h.standard.post(`${h.chores}/${h.chore.id}/complete-early`, {
+        idempotencyKey: "e1",
+        dueDate: chore.paused.completeAnyway.dueDate,
+        timeSlot: null,
+      });
+      expect(await res.json()).toMatchObject({ outcome: "completed", completion: { dueDate: "2026-03-02", early: true } });
+
+      expect((await h.admin.post(`${h.pauses}/${pause.id}/end`)).status).toBe(200);
+      expect(await h.statuses()).toEqual([
+        ["2026-03-01", "open"],
+        ["2026-03-02", "completed"],
+      ]);
     });
 
     test("Complete anyway records an Early Completion on the next Occurrence, keeping the Pause's Skips", async () => {

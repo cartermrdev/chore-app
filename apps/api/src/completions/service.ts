@@ -25,7 +25,8 @@ import {
   deriveNextDue,
   insertOccurrences,
   materialise,
-  planNext,
+  planEarlyTarget,
+  deriveEarlyTarget,
   planThrough,
   applyPauses,
   loadLatestOccurrence,
@@ -192,7 +193,8 @@ async function completeTarget({ tx, chore, timeZone, now }: InTx, req: CompleteR
     ON CONFLICT (occurrence_id) WHERE voided_at IS NULL DO NOTHING
     RETURNING id`;
   if (inserted.length > 0) {
-    await tx`UPDATE occurrences SET status = 'completed' WHERE id = ${target.id}`;
+    // An Early Completion under an indefinite Pause may land on a Pause-Skipped Occurrence; it is completed now.
+    await tx`UPDATE occurrences SET status = 'completed', skipped_by_pause_id = NULL WHERE id = ${target.id}`;
     return {
       outcome: "completed",
       completion: (await loadSummary(tx, { completionId: inserted[0].id }))!,
@@ -217,12 +219,13 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
     WHERE chore_id = ${chore.id} AND status = 'open' AND (window_end IS NULL OR window_end > ${now})
     ORDER BY window_start LIMIT 1`;
   // Fixed Occurrences inside a Pause are not "next" (they'll be Skipped); an Interval one moves to the Pause's end.
+  // Under an indefinite Pause, the next one ignoring the Pause ("Complete anyway"; see planEarlyTarget).
   const pauses = await loadChorePauses(tx, req.householdId, chore.id);
   const latest = open ? null : await loadLatestOccurrence(tx, chore.id);
-  const planned = open ? null : planNext(chore.schedule, timeZone, latest, pauses);
+  const planned = open ? null : planEarlyTarget(chore.schedule, timeZone, latest, pauses);
   const candidate: (Omit<Target, "id"> & { id: string | null; dueDate: string }) | null = open
     ? { id: open.id, dueDate: open.due_date, timeSlot: open.time_slot, windowStart: open.window_start, dueTime: open.due_time }
-    : planned && { id: null, ...planned };
+    : planned && { id: null, ...planned.next };
 
   if (!candidate || candidate.dueDate !== req.dueDate || candidate.timeSlot !== timeSlot) {
     // Not the next Occurrence: completed already (perhaps by a concurrent request), or a stale request.
@@ -239,9 +242,9 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
     // Create it ahead of its Window, together with any Pause-covered Fixed Occurrences before it
     // (stored as Skipped, so history has no gap and planning resumes after the target).
     // A concurrent request may have just done so; then we use that row.
-    const owner = { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id };
-    const upToTarget = planThrough(chore.schedule, timeZone, latest, pauses, planned!.windowStart);
-    await insertOccurrences(tx, { chore: owner, householdId: req.householdId, now }, upToTarget);
+    const choreToPlan = { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id };
+    const upToTarget = planThrough(chore.schedule, timeZone, latest, planned!.pauses, planned!.next.windowStart);
+    await insertOccurrences(tx, { chore: choreToPlan, householdId: req.householdId, now }, upToTarget);
     await applyPauses(tx, { householdId: req.householdId, now, choreId: chore.id });
     const [row] = await tx`
       SELECT id FROM occurrences
@@ -285,11 +288,13 @@ async function completeInTx(
 }
 
 /**
- * When the Chore is next due (materialising it first), without completing
- * anything: what the Scan resolver's `paused` outcome offers to "Complete
- * anyway". Null for an unknown or Archived Chore, or when nothing is next.
+ * The Occurrence "Complete anyway" would record on (materialising first),
+ * without completing anything: what the Scan resolver's `paused` outcome
+ * offers. The next that will fall due, or under an indefinite Pause the next
+ * one ignoring the Pause (see planEarlyTarget). Null for an unknown or
+ * Archived Chore, or when the Schedule has nothing next.
  */
-export async function nextDueFor(
+export async function completeAnywayTarget(
   deps: { db: Db; clock: Clock },
   input: { householdId: string; choreId: string; timeZone: string },
 ): Promise<NextDueJson> {
@@ -299,14 +304,19 @@ export async function nextDueFor(
     WHERE id = ${input.choreId}::uuid AND household_id = ${input.householdId} AND archived_at IS NULL`.catch(() => []);
   if (!chore) return null;
   await materialise(db, { householdId: input.householdId, timeZone: input.timeZone, now: clock.now(), choreId: chore.id });
-  return nextDueJson(db, chore, input.timeZone);
+  return nextDueJson(db, chore, input.timeZone, deriveEarlyTarget);
 }
 
-async function nextDueJson(tx: Db, chore: { id: string; schedule: any; household_id: string }, timeZone: string): Promise<NextDueJson> {
+async function nextDueJson(
+  tx: Db,
+  chore: { id: string; schedule: any; household_id: string },
+  timeZone: string,
+  derive: typeof deriveNextDue = deriveNextDue,
+): Promise<NextDueJson> {
   const [firstOpen] = await tx`
     SELECT due_date::text AS due_date, time_slot, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' ORDER BY window_start LIMIT 1`;
-  const next = deriveNextDue(
+  const next = derive(
     chore.schedule,
     timeZone,
     firstOpen ? { dueDate: firstOpen.due_date, timeSlot: firstOpen.time_slot, dueTime: firstOpen.due_time } : null,

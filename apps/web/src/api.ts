@@ -93,8 +93,11 @@ export type Chore = {
   } | null;
   /** The next Occurrence; what "Complete early" names in its request. */
   nextDue: { dueDate: string; timeSlot: string | null; dueTime: string } | null;
-  /** Set while a Pause covers today; `until` is the last paused date (null: indefinite). */
-  paused: { until: string | null } | null;
+  /**
+   * Set while a Pause covers today; `until` is the last paused date (null: indefinite).
+   * `completeAnyway` is the Occurrence "Complete anyway" names (even under an indefinite Pause).
+   */
+  paused: { until: string | null; completeAnyway: Chore["nextDue"] } | null;
 };
 
 /** GET /households/:id/pauses. Mirrors PauseView in apps/api/src/pauses/service.ts. */

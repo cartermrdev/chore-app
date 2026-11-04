@@ -4,7 +4,7 @@
  */
 import type { Db } from "../db/client";
 import type { CurrentMembership } from "../households/membership";
-import { deriveNextDue, materialise, type NextDue } from "../occurrences/materialise";
+import { deriveEarlyTarget, deriveNextDue, materialise, type NextDue } from "../occurrences/materialise";
 import { pausedThrough, type Pause, type Schedule } from "../schedule/engine";
 import { localDateOf, type LocalDate } from "../schedule/calendar";
 import { loadPauses, pausesFor } from "../pauses/service";
@@ -73,8 +73,10 @@ export type ChoreView = {
   /**
    * Set while a Chore or Household Pause covers today: `until` is the last
    * paused date of the current run of Pauses, or null if indefinite.
+   * `completeAnyway` is the Occurrence "Complete anyway" names: `nextDue`, or
+   * under an indefinite Pause the next one ignoring the Pause.
    */
-  paused: { until: LocalDate | null } | null;
+  paused: { until: LocalDate | null; completeAnyway: NextDue | null } | null;
 };
 
 /** `archivedAt` is null for an active Chore; an Archived Chore keeps its history readable here. */
@@ -127,11 +129,8 @@ function toChoreView(
   const currentOccurrence = opened.find((o) => o.status === "open") ?? opened.at(-1) ?? null;
 
   const latest = occurrences.at(-1);
-  const nextDue = deriveNextDue(
-    chore.schedule,
-    timeZone,
-    occurrences.find((o) => o.status === "open") ?? null,
-    latest
+  const firstOpen = occurrences.find((o) => o.status === "open") ?? null;
+  const latestStored = latest
       ? {
           windowStart: latest.windowStart,
           windowEnd: latest.windowEnd,
@@ -141,10 +140,10 @@ function toChoreView(
             latest.excuse?.excusedAt ??
             (latest.status === "missed" || latest.status === "skipped" ? latest.windowEnd : null),
         }
-      : null,
-    pauses,
-  );
+      : null;
+  const nextDue = deriveNextDue(chore.schedule, timeZone, firstOpen, latestStored, pauses);
   const through = pausedThrough(pauses, localDateOf(now, timeZone));
+  const completeAnyway = () => deriveEarlyTarget(chore.schedule, timeZone, firstOpen, latestStored, pauses);
   return {
     id: chore.id,
     name: chore.name,
@@ -152,7 +151,7 @@ function toChoreView(
     assignee: personRef(chore.assignee_id, chore.assignee_name),
     currentOccurrence,
     nextDue,
-    paused: through === undefined ? null : { until: through },
+    paused: through === undefined ? null : { until: through, completeAnyway: completeAnyway() },
   };
 }
 
