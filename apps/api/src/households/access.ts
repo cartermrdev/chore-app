@@ -43,7 +43,7 @@ export async function currentPersonIds(db: Db, householdId: string, personIds?: 
 
 /**
  * For routes under /households/:householdId. Requires requireSession first.
- * Non-members get 404 so a Household reveals nothing to outsiders.
+ * Outsiders get 404 so a Household reveals nothing to outsiders.
  */
 export const requireMembership: MiddlewareHandler<AppEnv> = async (c, next) => {
   const householdId = c.req.param("householdId");

@@ -93,7 +93,7 @@ export function InvitePage({ token }: { token: string }) {
   if (info.error) return <p role="alert">Something went wrong.</p>;
 
   if (me.data && info.data.kind === "new") {
-    const alreadyMember = join.error instanceof ApiError && join.error.status === 409;
+    const alreadyInHousehold = join.error instanceof ApiError && join.error.status === 409;
     return (
       <section>
         <h1>Join {info.data.household.name}</h1>
@@ -101,8 +101,8 @@ export function InvitePage({ token }: { token: string }) {
         <button type="button" disabled={join.isPending} onClick={() => join.mutate()}>
           Join as {me.data.person.displayName}
         </button>
-        {alreadyMember && <p role="alert">You're already in this Household.</p>}
-        {join.isError && !alreadyMember && <p role="alert">That didn't work. Try again.</p>}
+        {alreadyInHousehold && <p role="alert">You're already in this Household.</p>}
+        {join.isError && !alreadyInHousehold && <p role="alert">That didn't work. Try again.</p>}
         <p>
           Not {me.data.person.displayName}?{" "}
           <button type="button" disabled={accept.isPending} onClick={() => accept.mutate()}>

@@ -8,8 +8,8 @@ import { acceptInvite, beginInvite, createInvite, describeInvite, joinWithInvite
  * Admin: /api/households/:householdId/invites
  *
  * POST { displayName, role?: "admin"|"standard" } -> 201 CreatedInvite (kind "new", role defaults to standard)
- * POST { personId }                              -> 201 CreatedInvite (kind "recovery" for a current member)
- * 400 for a bad body, 404 for a recovery target who isn't a current member, 403 for Standard.
+ * POST { personId }                              -> 201 CreatedInvite (kind "recovery" for a current Person here)
+ * 400 for a bad body, 404 for a recovery target with no current Membership here, 403 for Standard.
  */
 export const householdInviteRoutes = new Hono<AppEnv>()
   .use(requireSession, requireMembership, requireAdmin)
@@ -39,7 +39,7 @@ export const householdInviteRoutes = new Hono<AppEnv>()
  * POST /options                         -> 200 { challengeId, options } (WebAuthn creation options)
  * POST /accept { challengeId, response } -> 200 { personId } and a session cookie
  * POST /join (session)                  -> 200 { personId, householdId }: the signed-in Person joins
- *   the Household with their existing login (kind "new" only). 409 already_a_member, 401 without a session.
+ *   the Household with their existing login (kind "new" only). 409 already_in_household, 401 without a session.
  * An unknown, used or expired Invite is 404 everywhere; a bad passkey response is 400.
  */
 export const inviteRoutes = new Hono<AppEnv>()

@@ -15,7 +15,7 @@ import { CompleterPicker, ExcuseForm, useHouseholdPersons, VoidButton } from "./
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
 
 /** The Household's current Persons (for choosing and naming Assignees). */
-function useMembers(householdId: string) {
+function useCurrentPersons(householdId: string) {
   return useHouseholdPersons(householdId, true).data?.persons ?? [];
 }
 
@@ -79,8 +79,8 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
     },
   });
 
-  const members = useMembers(householdId);
-  const nameOf = (id: string) => members.find((m) => m.id === id)?.displayName;
+  const persons = useCurrentPersons(householdId);
+  const nameOf = (id: string) => persons.find((m) => m.id === id)?.displayName;
   const occ = chore.currentOccurrence;
   const nextDue = chore.nextDue;
   // What "Complete early"/"Complete anyway" names; under an indefinite Pause there is no nextDue but still a target.
@@ -272,7 +272,7 @@ function ChoreForm(props: {
   const [schedule, setSchedule] = useState(props.initialSchedule);
   const [assigneeId, setAssigneeId] = useState(props.initialAssigneeId);
   const [invalid, setInvalid] = useState<string | null>(null);
-  const members = useMembers(props.householdId);
+  const persons = useCurrentPersons(props.householdId);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -292,10 +292,10 @@ function ChoreForm(props: {
       {/* With Time Slots, each slot has its own Assignee instead. */}
       {schedule.slots.length === 0 && (
         <>
-          <AssigneeSelect label="Assignee" value={assigneeId} members={members} onChange={setAssigneeId} />{" "}
+          <AssigneeSelect label="Assignee" value={assigneeId} persons={persons} onChange={setAssigneeId} />{" "}
         </>
       )}
-      <ScheduleFields draft={schedule} members={members} onChange={setSchedule} />{" "}
+      <ScheduleFields draft={schedule} persons={persons} onChange={setSchedule} />{" "}
       <button type="submit" disabled={props.pending}>
         {props.submitText ?? props.label}
       </button>

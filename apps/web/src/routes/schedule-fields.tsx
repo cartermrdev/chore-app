@@ -120,11 +120,11 @@ function describeRule(rule: FixedRule): string {
 }
 
 /** A select of the Household's Persons, with "(nobody)" for unassigned. */
-export function AssigneeSelect(props: { label: string; value: string; members: HouseholdPerson[]; onChange: (personId: string) => void }) {
+export function AssigneeSelect(props: { label: string; value: string; persons: HouseholdPerson[]; onChange: (personId: string) => void }) {
   return (
     <select aria-label={props.label} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
       <option value="">(nobody)</option>
-      {props.members.map((m) => (
+      {props.persons.map((m) => (
         <option key={m.id} value={m.id}>
           {m.displayName}
         </option>
@@ -134,7 +134,7 @@ export function AssigneeSelect(props: { label: string; value: string; members: H
 }
 
 /** Time Slot rows: name, start time and Assignee, with add and remove buttons. */
-function SlotFields({ slots, members, onChange }: { slots: SlotDraft[]; members: HouseholdPerson[]; onChange: (s: SlotDraft[]) => void }) {
+function SlotFields({ slots, persons, onChange }: { slots: SlotDraft[]; persons: HouseholdPerson[]; onChange: (s: SlotDraft[]) => void }) {
   const update = (i: number, patch: Partial<SlotDraft>) => onChange(slots.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
     <fieldset>
@@ -159,7 +159,7 @@ function SlotFields({ slots, members, onChange }: { slots: SlotDraft[]; members:
           <AssigneeSelect
             label={`Slot ${i + 1} assignee`}
             value={slot.assigneeId}
-            members={members}
+            persons={persons}
             onChange={(assigneeId) => update(i, { assigneeId })}
           />{" "}
           <button type="button" aria-label={`Remove slot ${i + 1}`} onClick={() => onChange(slots.filter((_, j) => j !== i))}>
@@ -176,11 +176,11 @@ function SlotFields({ slots, members, onChange }: { slots: SlotDraft[]; members:
 
 export function ScheduleFields({
   draft,
-  members,
+  persons,
   onChange,
 }: {
   draft: ScheduleDraft;
-  members: HouseholdPerson[];
+  persons: HouseholdPerson[];
   onChange: (d: ScheduleDraft) => void;
 }) {
   const repeatsId = useId();
@@ -273,7 +273,7 @@ export function ScheduleFields({
       )}
       {/* Time Slots are Fixed-only. */}
       {draft.repeats !== "interval" && draft.repeats !== "one_off" && (
-        <SlotFields slots={draft.slots} members={members} onChange={(slots) => set({ slots })} />
+        <SlotFields slots={draft.slots} persons={persons} onChange={(slots) => set({ slots })} />
       )}
     </>
   );

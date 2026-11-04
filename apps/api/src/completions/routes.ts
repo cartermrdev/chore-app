@@ -19,7 +19,7 @@ function respond(c: any, result: WithdrawResult | ExcuseResult) {
 
 /**
  * /api/completions. The Household is found from the Completion, so the scan
- * page can Undo without knowing it. Non-members get 404.
+ * page can Undo without knowing it. Outsiders get 404.
  *
  * POST /:completionId/undo -> 200 { occurrence: { id, status } } | 403 forbidden/undo_expired | 404 | 409 already_voided
  * POST /:completionId/void -> same, Admin only (403 forbidden otherwise)

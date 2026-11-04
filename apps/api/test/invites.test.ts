@@ -151,7 +151,7 @@ describe("Invites", () => {
       expect((await (await later.get("/api/me")).json()).person.id).toBe(accepted.personId);
     });
 
-    test("a recovery Invite is only for a current member of the Admin's Household", async () => {
+    test("a recovery Invite is only for a Person currently in the Admin's Household", async () => {
       const { invite } = await adminWithHousehold();
       const other = await t.seed();
 

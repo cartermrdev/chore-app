@@ -163,7 +163,7 @@ describe("Memberships and Roles", () => {
       const again = await (await bAdmin.post(`/api/households/${b.household.id}/invites`, { displayName: "x" })).json();
       const res = await a.standard.post(`/api/invites/${again.token}/join`);
       expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({ error: "already_a_member" });
+      expect(await res.json()).toEqual({ error: "already_in_household" });
       // The Invite wasn't used up.
       expect((await t.anonymous().get(`/api/invites/${again.token}`)).status).toBe(200);
     });

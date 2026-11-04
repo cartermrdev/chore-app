@@ -117,7 +117,7 @@ describe("Scan", () => {
     expect(res).toMatchObject({ outcome: "tag_unlinked", canLink: false });
   });
 
-  test("a Person outside the Tag's Household is told only that they are not a member", async () => {
+  test("a Person outside the Tag's Household is told only that they are not part of it (not_a_member)", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household();
     const other = await t.seed();

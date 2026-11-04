@@ -7,7 +7,7 @@ import { createPause, endPauseEarly, listPauses } from "./service";
 
 /**
  * /api/households/:householdId/pauses
- * GET  (any member) -> { pauses: PauseView[] }: current, upcoming and past.
+ * GET  (any Person in the Household) -> { pauses: PauseView[] }: current, upcoming and past.
  * POST (Admin) { choreId?: string|null, startDate?: LocalDate, endDate?: LocalDate|null }
  *   -> 201 PauseView. choreId null/omitted pauses the whole Household.
  *   400 invalid_dates | start_in_past | chore_not_found.
