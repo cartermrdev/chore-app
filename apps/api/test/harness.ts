@@ -12,7 +12,7 @@ import { afterAll, beforeAll } from "bun:test";
 import { createApp, type App } from "../src/app";
 import { createTestClock, type TestClock } from "../src/clock";
 import type { Config } from "../src/config";
-import { connect, type Db } from "../src/db/client";
+import { connect } from "../src/db/client";
 import { seedHousehold, type SeedInput, type SeedResult } from "../src/households/seed";
 import { createTestDatabase } from "./test-database";
 import { createOutbox, type Mail } from "../src/auth/mailer";
@@ -28,11 +28,9 @@ export type TestClient = {
 
 export type TestApp = {
   app: App;
-  /** For harness setup only (e.g. seeding). Tests assert through HTTP, not the DB. */
-  db: Db;
   clock: TestClock;
   seed(input?: Partial<SeedInput>): Promise<SeedResult>;
-  /** Adds a Person with a current Membership (setup only: there is no Invite API yet). */
+  /** Adds a Person with a current Membership, through the test-only endpoint that stands in for an Invite. */
   addPerson(householdId: string, opts?: { displayName?: string; role?: "admin" | "standard" }): Promise<{ id: string; displayName: string }>;
   /** Signs in through the test-only sign-in path and returns a client carrying the session. */
   signIn(personId: string): Promise<TestClient>;
@@ -88,10 +86,10 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
 
   return {
     app,
-    db,
     clock,
     seed: (input = {}) => {
       seq += 1;
+      // The seed command (`bun run seed`) is the only way a Household comes into existence (ADR 0002).
       return seedHousehold(db, clock, {
         householdName: `Household ${seq}`,
         timeZone: "Europe/London",
@@ -99,16 +97,13 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
         ...input,
       });
     },
-    async addPerson(householdId, opts = {}) {
+    addPerson(householdId, opts = {}) {
       seq += 1;
-      const now = clock.now();
-      const displayName = opts.displayName ?? `Person ${seq}`;
-      const [person] = await db`
-        INSERT INTO persons (display_name, created_at) VALUES (${displayName}, ${now}) RETURNING id`;
-      await db`
-        INSERT INTO memberships (household_id, person_id, role, created_at)
-        VALUES (${householdId}, ${person.id}, ${opts.role ?? "standard"}, ${now})`;
-      return { id: person.id, displayName };
+      return testEndpoint(app, "/api/test/add-person", {
+        householdId,
+        displayName: opts.displayName ?? `Person ${seq}`,
+        role: opts.role ?? "standard",
+      });
     },
     async signIn(personId) {
       const client = makeClient(app);
@@ -145,7 +140,6 @@ export function useTestApp(opts: TestAppOptions = {}): TestApp {
   };
   return {
     get app() { return get().app; },
-    get db() { return get().db; },
     get clock() { return get().clock; },
     seed: (i) => get().seed(i),
     addPerson: (h, o) => get().addPerson(h, o),
@@ -156,6 +150,13 @@ export function useTestApp(opts: TestAppOptions = {}): TestApp {
     signInWithPasskey: (c, d) => get().signInWithPasskey(c, d),
     close: () => get().close(),
   };
+}
+
+/** Calls a test-only setup endpoint (/api/test/...), failing loudly if it refuses. */
+async function testEndpoint<T>(app: App, path: string, body: unknown): Promise<T> {
+  const res = await makeClient(app).post(path, body);
+  if (res.status !== 200) throw new Error(`${path} failed: ${res.status} ${await res.text()}`);
+  return res.json() as Promise<T>;
 }
 
 async function acceptInvite(client: TestClient, token: string, device: FakeDevice): Promise<Response> {

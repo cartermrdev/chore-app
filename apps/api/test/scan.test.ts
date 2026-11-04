@@ -98,8 +98,7 @@ describe("Scan", () => {
   test("a Tag whose Chore is Archived reports tag_unlinked", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household();
-    // Setup only: there is no Archive API yet.
-    await t.db`UPDATE chores SET archived_at = ${t.clock.now()} WHERE id = ${h.chore.id}`;
+    expect((await h.admin.post(`${h.base}/chores/${h.chore.id}/archive`)).status).toBe(200);
 
     const res = await (await h.scan(h.standard, "k")).json();
 

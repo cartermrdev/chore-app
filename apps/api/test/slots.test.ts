@@ -241,8 +241,7 @@ describe("Assignees", () => {
   test("an Assignee whose Membership has ended is not copied onto new Occurrences", async () => {
     const { admin, base, sam, household: h } = await household();
     const chore = await (await admin.post(base, { name: "Dishes", schedule: daily(), assigneeId: sam.id })).json();
-    // No API ends a Membership yet (#17).
-    await t.db`UPDATE memberships SET ended_at = ${t.clock.now()} WHERE person_id = ${sam.id} AND household_id = ${h.id}`;
+    expect((await admin.delete(`/api/households/${h.id}/persons/${sam.id}`)).status).toBe(204);
 
     t.clock.set("2026-01-05T09:00:00Z");
     const detail = await (await admin.get(`${base}/${chore.id}`)).json();

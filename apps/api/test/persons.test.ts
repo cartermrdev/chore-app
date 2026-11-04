@@ -8,7 +8,8 @@ describe("GET /api/households/:householdId/persons", () => {
     const { person, household } = await t.seed({ adminName: "Alex" });
     const sam = await t.addPerson(household.id, { displayName: "Sam", role: "standard" });
     const gone = await t.addPerson(household.id, { displayName: "Gone" });
-    await t.db`UPDATE memberships SET ended_at = ${t.clock.now()} WHERE person_id = ${gone.id}`;
+    const admin = await t.signIn(person.id);
+    expect((await admin.delete(`/api/households/${household.id}/persons/${gone.id}`)).status).toBe(204);
     const standard = await t.signIn(sam.id);
 
     const res = await standard.get(`/api/households/${household.id}/persons`);
