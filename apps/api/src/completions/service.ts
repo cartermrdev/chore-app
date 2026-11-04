@@ -20,11 +20,14 @@ import type { Clock } from "../clock";
 import type { Db } from "../db/client";
 import { findMembership } from "../households/membership";
 import { isLocalDate } from "../schedule/calendar";
+import { loadChorePauses } from "../pauses/service";
 import {
   deriveNextDue,
   insertOccurrences,
   materialise,
   planNext,
+  planThrough,
+  applyPauses,
   loadLatestOccurrence,
 } from "../occurrences/materialise";
 
@@ -122,7 +125,7 @@ export function parseEarlyTarget(body: any): { dueDate: string; timeSlot: string
   return { dueDate: body.dueDate, timeSlot };
 }
 
-type ChoreRow = { id: string; name: string; schedule: any; assignee_id: string | null };
+type ChoreRow = { id: string; name: string; schedule: any; assignee_id: string | null; household_id: string };
 type InTx = { tx: Db; chore: ChoreRow; timeZone: string; now: Date };
 
 /** The checks, materialisation and idempotency every completion entry point shares. */
@@ -143,7 +146,7 @@ async function runCompletion(
   if (req.completerId !== req.recorderId && recorder.role !== "admin") return { outcome: "forbidden" };
 
   const [chore] = await db`
-    SELECT id, name, schedule, assignee_id FROM chores
+    SELECT id, name, schedule, assignee_id, household_id FROM chores
     WHERE id = ${req.choreId}::uuid AND household_id = ${req.householdId} AND archived_at IS NULL`.catch(() => []);
   if (!chore) return { outcome: "chore_not_found" };
 
@@ -213,7 +216,10 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
     SELECT id, due_date::text AS due_date, time_slot, window_start, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' AND (window_end IS NULL OR window_end > ${now})
     ORDER BY window_start LIMIT 1`;
-  const planned = open ? null : planNext(chore.schedule, timeZone, await loadLatestOccurrence(tx, chore.id));
+  // Fixed Occurrences inside a Pause are not "next" (they'll be Skipped); an Interval one moves to the Pause's end.
+  const pauses = await loadChorePauses(tx, req.householdId, chore.id);
+  const latest = open ? null : await loadLatestOccurrence(tx, chore.id);
+  const planned = open ? null : planNext(chore.schedule, timeZone, latest, pauses);
   const candidate: (Omit<Target, "id"> & { id: string | null; dueDate: string }) | null = open
     ? { id: open.id, dueDate: open.due_date, timeSlot: open.time_slot, windowStart: open.window_start, dueTime: open.due_time }
     : planned && { id: null, ...planned };
@@ -230,9 +236,13 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
 
   let id = candidate.id;
   if (!id) {
-    // Create it ahead of its Window. A concurrent request may have just done so; then we use that row.
+    // Create it ahead of its Window, together with any Pause-covered Fixed Occurrences before it
+    // (stored as Skipped, so history has no gap and planning resumes after the target).
+    // A concurrent request may have just done so; then we use that row.
     const owner = { id: chore.id, schedule: chore.schedule, assigneeId: chore.assignee_id };
-    await insertOccurrences(tx, { chore: owner, householdId: req.householdId, now }, [planned!]);
+    const upToTarget = planThrough(chore.schedule, timeZone, latest, pauses, planned!.windowStart);
+    await insertOccurrences(tx, { chore: owner, householdId: req.householdId, now }, upToTarget);
+    await applyPauses(tx, { householdId: req.householdId, now, choreId: chore.id });
     const [row] = await tx`
       SELECT id FROM occurrences
       WHERE chore_id = ${chore.id} AND due_date = ${candidate.dueDate}::date AND COALESCE(time_slot, '') = ${timeSlot ?? ""}`;
@@ -274,7 +284,25 @@ async function completeInTx(
   return { outcome: "nothing_due", nextDue };
 }
 
-async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZone: string): Promise<NextDueJson> {
+/**
+ * When the Chore is next due (materialising it first), without completing
+ * anything: what the Scan resolver's `paused` outcome offers to "Complete
+ * anyway". Null for an unknown or Archived Chore, or when nothing is next.
+ */
+export async function nextDueFor(
+  deps: { db: Db; clock: Clock },
+  input: { householdId: string; choreId: string; timeZone: string },
+): Promise<NextDueJson> {
+  const { db, clock } = deps;
+  const [chore] = await db`
+    SELECT id, schedule, household_id FROM chores
+    WHERE id = ${input.choreId}::uuid AND household_id = ${input.householdId} AND archived_at IS NULL`.catch(() => []);
+  if (!chore) return null;
+  await materialise(db, { householdId: input.householdId, timeZone: input.timeZone, now: clock.now(), choreId: chore.id });
+  return nextDueJson(db, chore, input.timeZone);
+}
+
+async function nextDueJson(tx: Db, chore: { id: string; schedule: any; household_id: string }, timeZone: string): Promise<NextDueJson> {
   const [firstOpen] = await tx`
     SELECT due_date::text AS due_date, time_slot, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' ORDER BY window_start LIMIT 1`;
@@ -283,6 +311,7 @@ async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZon
     timeZone,
     firstOpen ? { dueDate: firstOpen.due_date, timeSlot: firstOpen.time_slot, dueTime: firstOpen.due_time } : null,
     await loadLatestOccurrence(tx, chore.id),
+    await loadChorePauses(tx, chore.household_id, chore.id),
   );
   return next ? { dueDate: next.dueDate, timeSlot: next.timeSlot, dueTime: next.dueTime.toISOString() } : null;
 }

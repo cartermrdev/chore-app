@@ -33,9 +33,9 @@ export async function archiveChore(
 export type DeleteResult = { ok: true } | { ok: false; error: "not_found" | "has_history" };
 
 /**
- * Hard-deletes a Chore that has no Completions, with its (unhistoried)
- * Occurrences; its Tags are left registered but unlinked. A Chore with any
- * Completion must be Archived instead.
+ * Hard-deletes a Chore that has no Completions or Excuses, with its
+ * (unhistoried) Occurrences and its own Chore Pauses; its Tags are left
+ * registered but unlinked. A Chore with any Completion must be Archived instead.
  */
 export async function deleteChore(db: Db, input: { householdId: string; choreId: string }): Promise<DeleteResult> {
   try {
@@ -54,7 +54,10 @@ export async function deleteChore(db: Db, input: { householdId: string; choreId:
         LIMIT 1`;
       if (history) return { ok: false, error: "has_history" } as const;
       await tx`UPDATE tags SET chore_id = NULL WHERE chore_id = ${chore.id}`;
+      // Occurrences first: Pause-Skipped ones reference their Pause. The Chore's own
+      // Pauses go with it; Household Pauses stay (they cover other Chores).
       await tx`DELETE FROM occurrences WHERE chore_id = ${chore.id}`;
+      await tx`DELETE FROM pauses WHERE chore_id = ${chore.id}`;
       await tx`DELETE FROM chores WHERE id = ${chore.id}`;
       return { ok: true } as const;
     });

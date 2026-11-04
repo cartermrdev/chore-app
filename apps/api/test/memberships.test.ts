@@ -111,7 +111,7 @@ describe("Memberships and Roles", () => {
       ["Void", h.standard.post(`/api/completions/${done.completion.id}/void`)],
       ["Excuse", h.standard.post(`/api/occurrences/${open.id}/excuse`, { note: "ill" })],
       ["complete for someone else", h.standard.post(`${base}/chores/${chore.id}/complete`, { idempotencyKey: "s1", completerId: h.alex.id })],
-      // Pause: added by #24 with its own 403 test.
+      // Pause: see "Standard Persons get 403 on every Pause action" in pauses.test.ts.
     ];
 
     const statuses = Object.fromEntries(await Promise.all(attempts.map(async ([name, p]) => [name, (await p).status])));

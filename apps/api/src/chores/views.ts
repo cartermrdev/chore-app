@@ -5,7 +5,9 @@
 import type { Db } from "../db/client";
 import type { CurrentMembership } from "../households/membership";
 import { deriveNextDue, materialise, type NextDue } from "../occurrences/materialise";
-import type { Schedule } from "../schedule/engine";
+import { pausedThrough, type Pause, type Schedule } from "../schedule/engine";
+import { localDateOf, type LocalDate } from "../schedule/calendar";
+import { loadPauses, pausesFor } from "../pauses/service";
 
 export type OccurrenceStatus = "open" | "completed" | "missed" | "skipped";
 
@@ -51,7 +53,12 @@ export type OccurrenceView = {
   /** Voided Completions, oldest first; they stay in history. */
   voidedCompletions: VoidedCompletionView[];
   excuse: ExcuseView | null;
+  /** Set when a Pause Skipped this Occurrence (status Skipped, `excuse` null). */
+  skippedByPause: SkippedByPauseView | null;
 };
+
+/** The Pause that Skipped an Occurrence; `choreId` null means a Household Pause. */
+export type SkippedByPauseView = { id: string; choreId: string | null; startDate: LocalDate; endDate: LocalDate | null };
 
 export type ChoreView = {
   id: string;
@@ -61,8 +68,13 @@ export type ChoreView = {
   assignee: PersonRef | null;
   /** The earliest Open Occurrence whose Window has opened, else the latest opened or Early-Completed one. */
   currentOccurrence: OccurrenceView | null;
-  /** The earliest Open Occurrence, else the next one the Schedule will create. */
+  /** The earliest Open Occurrence, else the next one that will fall due (passing over Pauses). */
   nextDue: NextDue | null;
+  /**
+   * Set while a Chore or Household Pause covers today: `until` is the last
+   * paused date of the current run of Pauses, or null if indefinite.
+   */
+  paused: { until: LocalDate | null } | null;
 };
 
 /** `archivedAt` is null for an active Chore; an Archived Chore keeps its history readable here. */
@@ -79,8 +91,9 @@ export async function listChores({ db, membership, now }: Scope): Promise<ChoreV
     WHERE c.household_id = ${membership.householdId} AND c.archived_at IS NULL
     ORDER BY c.name, c.created_at`;
   const occurrences = await loadOccurrences(db, membership.householdId, null);
+  const pauses = await loadPauses(db, membership.householdId);
   return chores.map((c: any) =>
-    toChoreView(c, occurrences.filter((o) => o.choreId === c.id), membership.timeZone, now),
+    toChoreView(c, occurrences.filter((o) => o.choreId === c.id), membership.timeZone, now, pausesFor(pauses, c.id)),
   );
 }
 
@@ -94,13 +107,19 @@ export async function getChore({ db, membership, now }: Scope, choreId: string):
   await materialise(db, { householdId: membership.householdId, timeZone: membership.timeZone, now, choreId });
   const occurrences = await loadOccurrences(db, membership.householdId, choreId);
   return {
-    ...toChoreView(chore, occurrences, membership.timeZone, now),
+    ...toChoreView(chore, occurrences, membership.timeZone, now, pausesFor(await loadPauses(db, membership.householdId), choreId)),
     archivedAt: chore.archived_at,
     occurrences: occurrences.map(({ choreId: _, ...o }) => o),
   };
 }
 
-function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: string })[], timeZone: string, now: Date): ChoreView {
+function toChoreView(
+  chore: any,
+  occurrences: (OccurrenceView & { choreId: string })[],
+  timeZone: string,
+  now: Date,
+  pauses: Pause[],
+): ChoreView {
   // Opened Occurrences, plus any completed ahead of their Window (Early Completions).
   const opened = occurrences
     .filter((o) => o.windowStart <= now || o.completion !== null)
@@ -116,14 +135,16 @@ function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: strin
       ? {
           windowStart: latest.windowStart,
           windowEnd: latest.windowEnd,
-          // Same rule as loadLatestOccurrence: completed, Excused, or Missed (at its Window end).
+          // Same rule as loadLatestOccurrence: completed, Excused, or Missed or Pause-Skipped (at its Window end).
           closedAt:
             latest.completion?.completedAt ??
             latest.excuse?.excusedAt ??
-            (latest.status === "missed" ? latest.windowEnd : null),
+            (latest.status === "missed" || latest.status === "skipped" ? latest.windowEnd : null),
         }
       : null,
+    pauses,
   );
+  const through = pausedThrough(pauses, localDateOf(now, timeZone));
   return {
     id: chore.id,
     name: chore.name,
@@ -131,6 +152,7 @@ function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: strin
     assignee: personRef(chore.assignee_id, chore.assignee_name),
     currentOccurrence,
     nextDue,
+    paused: through === undefined ? null : { until: through },
   };
 }
 
@@ -145,8 +167,11 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
            c.id AS completion_id, c.method, c.tag_id, c.completed_at, c.late, c.early,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name,
-           o.excuse_note, o.excused_at, ep.id AS excused_by_id, ep.display_name AS excused_by_name
+           o.excuse_note, o.excused_at, ep.id AS excused_by_id, ep.display_name AS excused_by_name,
+           pz.id AS pause_id, pz.chore_id AS pause_chore_id,
+           pz.start_date::text AS pause_start_date, pz.end_date::text AS pause_end_date
     FROM occurrences o
+    LEFT JOIN pauses pz ON pz.id = o.skipped_by_pause_id
     LEFT JOIN persons ap ON ap.id = o.assignee_id
     LEFT JOIN completions c ON c.occurrence_id = o.id AND c.voided_at IS NULL
     LEFT JOIN persons cp ON cp.id = c.completer_id
@@ -213,6 +238,9 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
           excusedAt: r.excused_at,
           excusedBy: { id: r.excused_by_id, displayName: r.excused_by_name },
         }
+      : null,
+    skippedByPause: r.pause_id
+      ? { id: r.pause_id, choreId: r.pause_chore_id, startDate: r.pause_start_date, endDate: r.pause_end_date }
       : null,
   })) as (OccurrenceView & { choreId: string })[];
 }

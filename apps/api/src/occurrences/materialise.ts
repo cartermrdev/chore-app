@@ -16,7 +16,8 @@
  * call the same function.
  */
 import type { Db } from "../db/client";
-import { occurrencesUpTo, type PlannedOccurrence, type Schedule } from "../schedule/engine";
+import { nextOccurrence, occurrencesUpTo, type Pause, type PlannedOccurrence, type Schedule } from "../schedule/engine";
+import { loadPauses, pausesFor } from "../pauses/service";
 
 export type MaterialiseScope = {
   householdId: string;
@@ -37,7 +38,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
     -- The latest stored Occurrence; keep in step with loadLatestOccurrence below.
     LEFT JOIN LATERAL (
       SELECT o.window_start, o.window_end,
-             COALESCE(cp.completed_at, o.excused_at, CASE WHEN o.status = 'missed' THEN o.window_end END) AS closed_at
+             COALESCE(cp.completed_at, o.excused_at, CASE WHEN o.status IN ('missed', 'skipped') THEN o.window_end END) AS closed_at
       FROM occurrences o
       LEFT JOIN completions cp ON cp.occurrence_id = o.id AND cp.voided_at IS NULL
       WHERE o.chore_id = c.id
@@ -47,11 +48,12 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       AND (${choreId}::uuid IS NULL OR c.id = ${choreId}::uuid)`;
 
   let members: Set<string> | undefined;
+  const pauses = chores.length > 0 ? await loadPauses(db, householdId) : [];
   for (const chore of chores) {
     const planned = occurrencesUpTo({
       schedule: chore.schedule as Schedule,
       timeZone,
-      pauses: [],
+      pauses: pausesFor(pauses, chore.id),
       lastCompletionAt: chore.last_closed ?? null,
       after: resumeAfter(chore.last_start ? { windowStart: chore.last_start, windowEnd: chore.last_end } : null),
       horizon: now,
@@ -65,12 +67,48 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
     );
   }
 
+  // Before Missed, so a Fixed Occurrence inside a Pause is Skipped rather than Missed.
+  await applyPauses(db, { householdId, now, choreId });
+
   // A Fixed Window that closed without a Completion: Missed.
   await db`
     UPDATE occurrences SET status = 'missed'
     WHERE household_id = ${householdId} AND status = 'open'
       AND window_end IS NOT NULL AND window_end <= ${now}
       AND (${choreId}::uuid IS NULL OR chore_id = ${choreId}::uuid)`;
+}
+
+/**
+ * Brings stored Fixed Occurrences in line with the Household's Pauses (the
+ * same inclusive date rule as the engine's `pausedThrough`):
+ *  1. a Pause-Skipped Occurrence whose due date no Pause covers any more (the
+ *     Pause was ended early) and whose Window is still open reopens;
+ *  2. an Open Fixed Occurrence (it has a Window end) whose due date a Pause
+ *     covers becomes Skipped, recording that Pause in `skipped_by_pause_id`.
+ * Interval and One-off Occurrences (no Window end) are never Skipped by a Pause.
+ */
+export async function applyPauses(db: Db, scope: { householdId: string; now: Date; choreId: string | null }) {
+  const { householdId, now, choreId } = scope;
+  await db`
+    UPDATE occurrences o SET status = 'open', skipped_by_pause_id = NULL
+    WHERE o.household_id = ${householdId} AND (${choreId}::uuid IS NULL OR o.chore_id = ${choreId}::uuid)
+      AND o.skipped_by_pause_id IS NOT NULL AND o.window_end > ${now}
+      AND NOT EXISTS (
+        SELECT 1 FROM pauses p
+        WHERE p.household_id = o.household_id AND (p.chore_id IS NULL OR p.chore_id = o.chore_id)
+          AND p.start_date <= o.due_date AND (p.end_date IS NULL OR o.due_date <= p.end_date))`;
+  await db`
+    UPDATE occurrences o SET status = 'skipped', skipped_by_pause_id = covering.id
+    FROM (
+      SELECT DISTINCT ON (oc.id) oc.id AS occurrence_id, p.id
+      FROM occurrences oc
+      JOIN pauses p ON p.household_id = oc.household_id AND (p.chore_id IS NULL OR p.chore_id = oc.chore_id)
+        AND p.start_date <= oc.due_date AND (p.end_date IS NULL OR oc.due_date <= p.end_date)
+      WHERE oc.household_id = ${householdId} AND (${choreId}::uuid IS NULL OR oc.chore_id = ${choreId}::uuid)
+        AND oc.status = 'open' AND oc.window_end IS NOT NULL
+      ORDER BY oc.id, p.start_date, p.created_at
+    ) covering
+    WHERE o.id = covering.occurrence_id AND o.status = 'open'`;
 }
 
 /**
@@ -158,7 +196,7 @@ export type LatestOccurrence = (StoredWindow & { closedAt: Date | null }) | null
 export async function loadLatestOccurrence(db: Db, choreId: string): Promise<LatestOccurrence> {
   const [r] = await db`
     SELECT o.window_start, o.window_end,
-           COALESCE(cp.completed_at, o.excused_at, CASE WHEN o.status = 'missed' THEN o.window_end END) AS closed_at
+           COALESCE(cp.completed_at, o.excused_at, CASE WHEN o.status IN ('missed', 'skipped') THEN o.window_end END) AS closed_at
     FROM occurrences o
     LEFT JOIN completions cp ON cp.occurrence_id = o.id AND cp.voided_at IS NULL
     WHERE o.chore_id = ${choreId}
@@ -176,22 +214,52 @@ export function deriveNextDue(
   timeZone: string,
   firstOpen: NextDue | null,
   latest: LatestOccurrence,
+  /** The Pauses that apply to the Chore (see pauses/service `pausesFor`). */
+  pauses: Pause[],
 ): NextDue | null {
   if (firstOpen) return { dueDate: firstOpen.dueDate, timeSlot: firstOpen.timeSlot, dueTime: firstOpen.dueTime };
-  const next = planNext(schedule, timeZone, latest);
+  const next = planNext(schedule, timeZone, latest, pauses);
   return next ? { dueDate: next.dueDate, timeSlot: next.timeSlot, dueTime: next.dueTime } : null;
 }
 
-/** The next Occurrence the Schedule will create after the latest stored one, however far ahead. */
-export function planNext(schedule: Schedule, timeZone: string, latest: LatestOccurrence): PlannedOccurrence | null {
-  const [next] = occurrencesUpTo({
+/**
+ * The next Occurrence that will fall due after the latest stored one, however
+ * far ahead: Fixed Occurrences inside a Pause (which will be Skipped) are
+ * passed over, and an Interval due date inside one is moved to its end.
+ * Null while an indefinite Pause covers everything from there on.
+ */
+export function planNext(
+  schedule: Schedule,
+  timeZone: string,
+  latest: LatestOccurrence,
+  pauses: Pause[],
+): PlannedOccurrence | null {
+  return nextOccurrence({
     schedule,
     timeZone,
-    pauses: [],
+    pauses,
     lastCompletionAt: latest?.closedAt ?? null,
     after: resumeAfter(latest),
-    horizon: new Date("9999-12-31T00:00:00Z"),
-    limit: 1,
   });
-  return next ?? null;
+}
+
+/**
+ * Every Occurrence the Schedule creates after the latest stored one, up to
+ * and including `through` (by Window start), Pause-covered Fixed ones included.
+ */
+export function planThrough(
+  schedule: Schedule,
+  timeZone: string,
+  latest: LatestOccurrence,
+  pauses: Pause[],
+  through: Date,
+): PlannedOccurrence[] {
+  return occurrencesUpTo({
+    schedule,
+    timeZone,
+    pauses,
+    lastCompletionAt: latest?.closedAt ?? null,
+    after: resumeAfter(latest),
+    horizon: through,
+  });
 }

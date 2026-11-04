@@ -17,6 +17,12 @@
  * Completion there is no next one. Interval and One-off Occurrences have no
  * Window end: they stay Open until completed and are never Missed.
  *
+ * Pauses: Fixed Occurrences inside a Pause are still returned by
+ * `occurrencesUpTo` (the materialiser stores them as Skipped) but passed over
+ * by `nextOccurrence`. An Interval due date inside a Pause moves to the
+ * Pause's end (the day after its end date); inside an indefinite Pause there
+ * is none until the Pause is given an end. One-off Schedules ignore Pauses.
+ *
  * Adding a Fixed kind:
  *   1. add a member to `FixedRule`,
  *   2. add a case to `fixedDueDates` yielding its due dates in order,
@@ -86,7 +92,49 @@ export type IntervalSchedule = {
 
 export type Schedule = FixedSchedule | IntervalSchedule | OneOffSchedule;
 
+/**
+ * A period during which a Chore's Occurrences do not fall due: its start date
+ * through its end date, inclusive, in the Household time zone (endDate null:
+ * indefinite). Fixed Occurrences due inside one are Skipped; an Interval due
+ * date inside one moves to the Pause's end (the day after its end date).
+ */
 export type Pause = { startDate: LocalDate; endDate: LocalDate | null };
+
+/**
+ * Whether `date` is paused, and through when: undefined when no Pause covers
+ * it; otherwise the last paused date of the unbroken run of Pauses covering
+ * it (back-to-back or overlapping Pauses chain), or null if that run is
+ * indefinite.
+ */
+export function pausedThrough(pauses: Pause[], date: LocalDate): LocalDate | null | undefined {
+  const covers = (p: Pause, d: LocalDate) =>
+    compareDates(p.startDate, d) <= 0 && (p.endDate === null || compareDates(d, p.endDate) <= 0);
+  if (!pauses.some((p) => covers(p, date))) return undefined;
+  let day = date;
+  while (true) {
+    const covering = pauses.filter((p) => covers(p, day));
+    if (covering.length === 0) return addDays(day, -1);
+    if (covering.some((p) => p.endDate === null)) return null;
+    day = addDays(covering.map((p) => p.endDate!).sort().at(-1)!, 1);
+  }
+}
+
+/**
+ * The next Occurrence after `after` that will fall due: the first of
+ * `occurrencesUpTo` with no horizon, except that Fixed Occurrences inside a
+ * Pause (which are Skipped) are passed over. Null when there is none,
+ * including while an indefinite Pause covers everything from there on.
+ */
+export function nextOccurrence(input: Omit<ScheduleInput, "horizon" | "limit">): PlannedOccurrence | null {
+  for (const occ of planned({ ...input, horizon: new Date(8.64e15) })) {
+    if (input.after && occ.windowStart <= input.after) continue;
+    if (input.schedule.kind !== "fixed") return occ;
+    const through = pausedThrough(input.pauses, occ.dueDate);
+    if (through === undefined) return occ;
+    if (through === null) return null;
+  }
+  return null;
+}
 
 export type ScheduleInput = {
   schedule: Schedule;
@@ -151,6 +199,10 @@ function* planned(input: ScheduleInput): Generator<PlannedOccurrence> {
         const afterLatest = addDays(localDateOf(input.after, timeZone), 1);
         dueDate = compareDates(fromCompletion, afterLatest) >= 0 ? fromCompletion : afterLatest;
       }
+      // The clock kept running; a due date inside a Pause moves to the Pause's end and stays Open.
+      const through = pausedThrough(input.pauses, dueDate);
+      if (through === null) return; // indefinite: nothing falls due until the Pause is given an end
+      if (through !== undefined) dueDate = addDays(through, 1);
       yield {
         dueDate,
         timeSlot: null,

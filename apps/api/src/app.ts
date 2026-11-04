@@ -14,6 +14,7 @@ import { authRoutes } from "./auth/routes";
 import { householdInviteRoutes, inviteRoutes } from "./invites/routes";
 import { completionRoutes, occurrenceRoutes } from "./completions/routes";
 import { personRoutes } from "./households/persons";
+import { pauseRoutes } from "./pauses/routes";
 
 /** Everything the app needs from the outside world. Tests inject their own. */
 export type Deps = {
@@ -64,6 +65,7 @@ export function createApp(input: AppInput) {
   api.route("/invites", inviteRoutes);
   api.route("/households/:householdId/invites", householdInviteRoutes);
   api.route("/households/:householdId/persons", personRoutes);
+  api.route("/households/:householdId/pauses", pauseRoutes);
   api.route("/completions", completionRoutes);
   api.route("/occurrences", occurrenceRoutes);
   if (deps.config.testAuth) api.route("/test", testRoutes);

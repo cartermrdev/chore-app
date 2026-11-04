@@ -7,17 +7,19 @@
  *   1. unknown Tag              -> tag_unregistered (well-formed id) | tag_not_found (malformed)
  *   2. no current Membership    -> not_a_member (names nothing)
  *   3. no (non-archived) Chore  -> tag_unlinked
- *   4. Completion service       -> completed | already_completed | nothing_due
- * New outcomes (paused, tag_unregistered, unauthenticated) slot in as extra
- * steps and union members. Early (and later "complete anyway") completions
- * are separate explicit requests (`resolveEarlyScan`), never implied by a
- * scan: a scan with nothing due only offers one (`earlyCompletionOffered`).
+ *   4. Chore paused today       -> paused (Scan only; records nothing)
+ *   5. Completion service       -> completed | already_completed | nothing_due
+ * Early and "Complete anyway" completions are separate explicit requests
+ * (`resolveEarlyScan`), never implied by a scan: a scan with nothing due only
+ * offers one (`earlyCompletionOffered`), and a paused one offers "Complete
+ * anyway" (`completeAnywayOffered`), which is an Early Completion of `nextDue`.
  */
 import type { Clock } from "../clock";
 import type { Db } from "../db/client";
 import {
   completeDueOccurrence,
   completeEarly,
+  nextDueFor,
   type CompleteRequest,
   type CompleteResult,
   type CompletionSummary,
@@ -25,6 +27,7 @@ import {
 } from "../completions/service";
 import { findMembership } from "../households/membership";
 import { findTag, isWellFormedTagId } from "../tags/service";
+import { pausedUntil } from "../pauses/service";
 
 export type ScanRequest = {
   tagId: string;
@@ -46,6 +49,18 @@ export type ScanOutcome =
       earlyCompletionOffered: boolean;
     }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: NextDueJson; earlyCompletionOffered: boolean }
+  /**
+   * A Chore or Household Pause covers today. `until` is the last paused date
+   * (null: indefinite); `nextDue` is the next Occurrence that will fall due,
+   * which "Complete anyway" (POST /api/scan/:tagId/complete-early) names.
+   */
+  | {
+      outcome: "paused";
+      chore: ChoreRef;
+      until: string | null;
+      nextDue: NextDueJson;
+      completeAnywayOffered: boolean;
+    }
   /** The Tag points at no Chore, or at an Archived one. */
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
   /** The Person has no current Membership in the Tag's Household. Reveals nothing about it. */
@@ -62,7 +77,7 @@ export type ScanOutcome =
 export type HouseholdRef = { id: string; name: string };
 
 export function resolveScan(deps: { db: Db; clock: Clock }, req: ScanRequest): Promise<ScanOutcome> {
-  return resolveTag(deps, req, (request) => completeDueOccurrence(deps, request));
+  return resolveTag(deps, req, (request) => completeDueOccurrence(deps, request), { checkPause: true });
 }
 
 /** The Occurrence the Person means to complete early: the `nextDue` the scan screen showed. */
@@ -74,8 +89,12 @@ export type EarlyScanRequest = ScanRequest & { dueDate: string; timeSlot: string
  * Early Completion (Method NFC, this Tag) through the Completion service.
  */
 export function resolveEarlyScan(deps: { db: Db; clock: Clock }, req: EarlyScanRequest): Promise<ScanOutcome> {
-  return resolveTag(deps, req, (request) =>
-    completeEarly(deps, { ...request, dueDate: req.dueDate, timeSlot: req.timeSlot }),
+  // No Pause check: on a paused Chore this is "Complete anyway".
+  return resolveTag(
+    deps,
+    req,
+    (request) => completeEarly(deps, { ...request, dueDate: req.dueDate, timeSlot: req.timeSlot }),
+    { checkPause: false },
   );
 }
 
@@ -83,6 +102,7 @@ async function resolveTag(
   deps: { db: Db; clock: Clock },
   req: ScanRequest,
   complete: (request: CompleteRequest) => Promise<CompleteResult>,
+  opts: { checkPause: boolean },
 ): Promise<ScanOutcome> {
   const tag = await findTag(deps.db, req.tagId);
   if (!tag) {
@@ -96,6 +116,15 @@ async function resolveTag(
 
   const unlinked = { outcome: "tag_unlinked", householdId: tag.householdId, canLink: membership.role === "admin" } as const;
   if (!tag.chore) return unlinked;
+
+  if (opts.checkPause) {
+    const scope = { householdId: tag.householdId, choreId: tag.chore.id, timeZone: membership.timeZone };
+    const until = await pausedUntil(deps.db, { ...scope, now: deps.clock.now() });
+    if (until !== undefined) {
+      const nextDue = await nextDueFor(deps, scope);
+      return { outcome: "paused", chore: tag.chore, until, nextDue, completeAnywayOffered: nextDue !== null };
+    }
+  }
 
   const result = await complete({
     householdId: tag.householdId,
