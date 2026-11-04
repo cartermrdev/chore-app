@@ -16,7 +16,7 @@ const baseUrl = `http://localhost:${webPort}`;
 const api = start("api", ["bun", "apps/api/src/server.ts"], {
   cwd: root,
   quiet: true,
-  env: { DATABASE_URL: database.url, PORT: String(apiPort), APP_ENV: "test", ENABLE_TEST_AUTH: "1" },
+  env: { DATABASE_URL: database.url, PORT: String(apiPort), APP_ENV: "test", ENABLE_TEST_AUTH: "1", PUBLIC_ORIGIN: baseUrl },
 });
 const web = start("web", ["bun", "x", "vite"], {
   cwd: join(root, "apps/web"),

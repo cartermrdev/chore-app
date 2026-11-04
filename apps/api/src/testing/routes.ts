@@ -2,14 +2,16 @@ import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { startSession } from "../auth/sessions";
 import { seedHousehold } from "../households/seed";
+import type { Mail } from "../auth/mailer";
 
 /**
  * Test-only endpoints under /api/test. Mounted only when config.testAuth is
- * true, which config.ts forbids in production. Used by the API harness and
+ * true, which config.ts allows only when APP_ENV=test. Used by the API harness and
  * by e2e tests to set up state; later tickets may add fixture endpoints here.
  *
  * POST /api/test/sign-in { personId }  creates a session (stands in for passkeys).
  * POST /api/test/seed { householdName, timeZone, adminName }  same as `bun run seed`.
+ * GET  /api/test/outbox?to=email  mail kept by the test outbox Mailer ({ mails }).
  */
 export const testRoutes = new Hono<AppEnv>()
   .post("/sign-in", async (c) => {
@@ -23,6 +25,12 @@ export const testRoutes = new Hono<AppEnv>()
 
     await startSession(c, personId);
     return c.json({ ok: true });
+  })
+  .get("/outbox", (c) => {
+    const mailer = c.var.deps.mailer as Partial<{ sent: Mail[] }>;
+    const to = c.req.query("to");
+    const mails = (mailer.sent ?? []).filter((m) => !to || m.to === to);
+    return c.json({ mails });
   })
   .post("/seed", async (c) => {
     const body = await c.req.json().catch(() => ({}));

@@ -22,7 +22,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export type Me = {
-  person: { id: string; displayName: string };
+  person: { id: string; displayName: string; email: string | null };
   memberships: {
     role: "admin" | "standard";
     household: { id: string; name: string; timeZone: string };

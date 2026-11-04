@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, Navigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type Chore, type ScanOutcome } from "../api";
 
@@ -43,7 +43,9 @@ export function ScanPage({ tagId }: { tagId: string }) {
   if (scan.isSuccess) return <OutcomeScreen result={scan.data} />;
   if (scan.isError) {
     const err = scan.error;
-    if (err instanceof ApiError && err.status === 401) return <Screen title="Sign in to continue" />;
+    // Logged out (or the session expired): sign in, then come straight back here to scan again
+    // automatically. Nothing was recorded, so the Person doesn't need to tap the Tag again.
+    if (err instanceof ApiError && err.status === 401) return <Navigate to="/sign-in" search={{ next: `/nfc/${tagId}` }} replace />;
     if (err instanceof ApiError && err.status === 404) return <Screen title="This tag isn't recognised" />;
     return (
       <Screen title="Couldn't record the scan">

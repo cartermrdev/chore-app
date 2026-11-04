@@ -19,6 +19,15 @@ export async function seed(
   return res.json();
 }
 
+/** The latest email the backend "sent" to `to` (test mode keeps mail in an outbox). */
+export async function lastMailTo(request: APIRequestContext, to: string): Promise<{ to: string; subject: string; text: string }> {
+  const res = await request.get(`/api/test/outbox?to=${encodeURIComponent(to)}`);
+  expect(res.status(), await res.text()).toBe(200);
+  const { mails } = await res.json();
+  expect(mails.length).toBeGreaterThan(0);
+  return mails.at(-1);
+}
+
 export async function signIn(request: APIRequestContext, personId: string): Promise<void> {
   const res = await request.post("/api/test/sign-in", { data: { personId } });
   expect(res.status(), await res.text()).toBe(200);
