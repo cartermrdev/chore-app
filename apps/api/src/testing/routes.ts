@@ -24,6 +24,26 @@ export const testRoutes = new Hono<AppEnv>()
     await startSession(c, personId);
     return c.json({ ok: true });
   })
+  // POST /api/test/add-person { householdId, displayName, role? } -> { id, displayName }
+  // Adds a Person with a current Membership (e2e setup; stands in for Invites).
+  .post("/add-person", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { householdId, displayName } = body ?? {};
+    const role = body?.role ?? "standard";
+    if (typeof householdId !== "string" || typeof displayName !== "string" || !["admin", "standard"].includes(role)) {
+      return c.json({ error: "householdId, displayName and role admin|standard required" }, 400);
+    }
+    const { db, clock } = c.var.deps;
+    const now = clock.now();
+    const person = await db.begin(async (tx) => {
+      const [p] = await tx`INSERT INTO persons (display_name, created_at) VALUES (${displayName}, ${now}) RETURNING id`;
+      await tx`
+        INSERT INTO memberships (household_id, person_id, role, created_at)
+        VALUES (${householdId}, ${p.id}, ${role}, ${now})`;
+      return p;
+    });
+    return c.json({ id: person.id, displayName });
+  })
   .post("/seed", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const { db, clock } = c.var.deps;

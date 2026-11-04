@@ -152,11 +152,11 @@ describe("Scan", () => {
     expect((await h.detail()).occurrences[0]).toMatchObject({ status: "open", completion: null });
   });
 
-  test("an unknown Tag, a missing key or a missing session is rejected without completing anything", async () => {
+  test("a malformed Tag ID, a missing key or a missing session is rejected without completing anything", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household();
 
-    expect((await h.scan(h.standard, "k", "AAAAAAAAAAAAAAAAAAAAAAAA")).status).toBe(404);
+    expect((await h.scan(h.standard, "k", "too-short")).status).toBe(404);
     expect((await h.standard.post(`/api/scan/${h.tag.id}`, {})).status).toBe(400);
     expect((await h.scan(t.anonymous(), "k")).status).toBe(401);
     expect((await h.detail()).occurrences[0].status).toBe("open");

@@ -25,7 +25,7 @@ import {
   insertOccurrences,
   materialise,
   planNext,
-  type LatestOccurrence,
+  loadLatestOccurrence,
 } from "../occurrences/materialise";
 
 export type Method = "manual" | "nfc";
@@ -210,7 +210,7 @@ async function completeEarlyInTx(c: InTx, req: EarlyRequest): Promise<CompleteRe
     SELECT id, due_date::text AS due_date, time_slot, window_start, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' AND (window_end IS NULL OR window_end > ${now})
     ORDER BY window_start LIMIT 1`;
-  const planned = open ? null : planNext(chore.schedule, timeZone, await latestOccurrence(tx, chore.id));
+  const planned = open ? null : planNext(chore.schedule, timeZone, await loadLatestOccurrence(tx, chore.id));
   const candidate: (Omit<Target, "id"> & { id: string | null; dueDate: string }) | null = open
     ? { id: open.id, dueDate: open.due_date, timeSlot: open.time_slot, windowStart: open.window_start, dueTime: open.due_time }
     : planned && { id: null, ...planned };
@@ -278,20 +278,9 @@ async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZon
     chore.schedule,
     timeZone,
     firstOpen ? { dueDate: firstOpen.due_date, dueTime: firstOpen.due_time } : null,
-    await latestOccurrence(tx, chore.id),
+    await loadLatestOccurrence(tx, chore.id),
   );
   return next ? { dueDate: next.dueDate, dueTime: next.dueTime.toISOString() } : null;
-}
-
-/** The Chore's latest stored Occurrence and its active Completion's time: where planning resumes. */
-async function latestOccurrence(tx: Db, choreId: string): Promise<LatestOccurrence> {
-  const [r] = await tx`
-    SELECT o.window_start, cp.completed_at
-    FROM occurrences o
-    LEFT JOIN completions cp ON cp.occurrence_id = o.id AND cp.voided_at IS NULL
-    WHERE o.chore_id = ${choreId}
-    ORDER BY o.window_start DESC LIMIT 1`;
-  return r ? { windowStart: r.window_start, completedAt: r.completed_at ?? null } : null;
 }
 
 /** The active Completion by id or by Occurrence. */

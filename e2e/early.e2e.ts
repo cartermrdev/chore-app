@@ -44,14 +44,14 @@ test("an Admin adds Interval and One-off Chores, and anyone can complete one ear
   await page.goto("/");
 
   await page.getByLabel("Chore name").fill("Change the filter");
-  await page.getByLabel("Schedule").selectOption({ label: "Interval" });
+  await page.getByLabel("Repeats").selectOption({ label: "Interval" });
   await page.getByLabel("Days after the last completion").fill("30");
   await page.getByRole("button", { name: "Add chore" }).click();
   const filter = page.getByRole("listitem").filter({ hasText: "Change the filter" });
   await expect(filter).toBeVisible();
 
   await page.getByLabel("Chore name").fill("Fix the gate");
-  await page.getByLabel("Schedule").selectOption({ label: "One-off" });
+  await page.getByLabel("Repeats").selectOption({ label: "One-off" });
   await page.getByLabel("Due date").fill("2030-01-15");
   await page.getByRole("button", { name: "Add chore" }).click();
   await expect(page.getByRole("listitem").filter({ hasText: "Fix the gate" })).toContainText("Next due 2030-01-15");

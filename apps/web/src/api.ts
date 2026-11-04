@@ -42,14 +42,40 @@ export type Completion = {
   early: boolean;
 };
 
+/** A Completion withdrawn by Undo or Void; it stays in history. */
+export type VoidedCompletion = Completion & { voidedAt: string; voidedBy: { id: string; displayName: string } };
+
+/** Set when an Admin Excused the Occurrence (status Skipped). */
+export type Excuse = { note: string; excusedAt: string; excusedBy: { id: string; displayName: string } };
+
+/** GET /households/:id/persons */
+export type HouseholdPerson = { id: string; displayName: string; role: "admin" | "standard" };
+
+/** ISO weekday: 1 = Monday … 7 = Sunday. */
+export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type FixedRule =
+  | { type: "every_n_days"; n: number }
+  | { type: "weekdays"; weekdays: Weekday[]; n: number }
+  | { type: "monthly"; day: number };
+
+/** Mirrors the backend Schedule engine's definition. */
+export type Schedule =
+  | { kind: "fixed"; startDate: string; rule: FixedRule }
+  | { kind: "interval"; startDate: string; periodDays: number }
+  | { kind: "one_off"; dueDate: string };
+
 export type Chore = {
   id: string;
   name: string;
+  schedule: Schedule;
   currentOccurrence: {
     id: string;
     dueDate: string;
     status: OccurrenceStatus;
     completion: Completion | null;
+    voidedCompletions: VoidedCompletion[];
+    excuse: Excuse | null;
   } | null;
   nextDue: { dueDate: string; dueTime: string } | null;
 };
@@ -79,4 +105,5 @@ export type ScanOutcome =
     }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: Chore["nextDue"]; earlyCompletionOffered: boolean }
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
+  | { outcome: "tag_unregistered"; canClaim: boolean; households: { id: string; name: string }[] }
   | { outcome: "not_a_member" };

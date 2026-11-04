@@ -71,6 +71,18 @@ describe("Interval and One-off Schedules", () => {
     expect(detail.nextDue).toBeNull();
   });
 
+  test("an Excused Interval Occurrence restarts the period from the Excuse", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const h = await household({ kind: "interval", periodDays: 10 });
+    const occurrenceId = (await h.detail()).currentOccurrence.id;
+    t.clock.set("2026-03-04T09:00:00Z");
+
+    const excused = await h.admin.post(`/api/occurrences/${occurrenceId}/excuse`, { note: "Away" });
+
+    expect(excused.status).toBe(200);
+    expect(await h.detail()).toMatchObject({ nextDue: { dueDate: "2026-03-14" } });
+  });
+
   test("Interval Schedules are validated", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household({ kind: "interval", periodDays: 0 });

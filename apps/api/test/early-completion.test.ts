@@ -139,6 +139,39 @@ describe("Early Completion in the app", () => {
     expect(res).toMatchObject({ outcome: "already_completed", nextDue: null });
   });
 
+  test("after an Early Completion is undone, that Occurrence is next due again and can be completed early again", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const h = await household({ kind: "interval", periodDays: 7 });
+    await h.complete(h.standard, "first");
+    const early = await (await h.completeEarly(h.standard, "early", "2026-03-08")).json();
+
+    const undo = await h.standard.post(`/api/completions/${early.completion.id}/undo`, {});
+
+    expect(undo.status).toBe(200);
+    expect(await h.detail()).toMatchObject({ nextDue: { dueDate: "2026-03-08" } });
+    const again = await (await h.completeEarly(h.standard, "early-again", "2026-03-08")).json();
+    expect(again).toMatchObject({ outcome: "completed", completion: { dueDate: "2026-03-08", early: true } });
+  });
+
+  test("an Admin can record an Early Completion on someone else's behalf", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const h = await household({ kind: "interval", periodDays: 7 });
+    await h.complete(h.standard, "first");
+
+    const res = await (
+      await h.admin.post(`${h.base}/${h.chore.id}/complete-early`, {
+        idempotencyKey: "for-sam",
+        dueDate: "2026-03-08",
+        completerId: h.sam.id,
+      })
+    ).json();
+
+    expect(res).toMatchObject({
+      outcome: "completed",
+      completion: { early: true, completer: { displayName: "Sam" }, recorder: { displayName: "Alex" } },
+    });
+  });
+
   test("a dueDate is required, and outsiders get 404", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household(everyNDays(1));

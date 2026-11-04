@@ -70,14 +70,14 @@ describe("Scan: Complete early", () => {
     expect(res).toMatchObject({ outcome: "already_completed", completion: { completer: { displayName: "Alex" } } });
   });
 
-  test("Complete early checks the Tag like a Scan: outsiders learn nothing, unknown Tags are 404", async () => {
+  test("Complete early checks the Tag like a Scan: outsiders learn nothing, malformed Tag ids are 404", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household();
     const other = await t.seed({ timeZone: "Europe/London", adminName: "Outsider" });
     const outsider = await t.signIn(other.person.id);
 
     expect(await (await h.scanEarly(outsider, "k", "2026-03-31")).json()).toEqual({ outcome: "not_a_member" });
-    expect((await h.scanEarly(h.standard, "k", "2026-03-31", "x".repeat(24))).status).toBe(404);
+    expect((await h.scanEarly(h.standard, "k", "2026-03-31", "short")).status).toBe(404);
     expect((await h.standard.post(`/api/scan/${h.tag.id}/complete-early`, { idempotencyKey: "k" })).status).toBe(400);
     expect((await t.anonymous().post(`/api/scan/${h.tag.id}/complete-early`, { idempotencyKey: "k", dueDate: "2026-03-31" })).status).toBe(401);
   });
