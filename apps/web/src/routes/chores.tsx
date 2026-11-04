@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Chore, type CompleteResult } from "../api";
+import {
+  describeSchedule,
+  draftFromSchedule,
+  EMPTY_DRAFT,
+  ScheduleFields,
+  scheduleFromDraft,
+  type ScheduleDraft,
+} from "./schedule-fields";
 
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
 
@@ -44,10 +52,11 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
     },
   });
 
+  const [editing, setEditing] = useState(false);
   const occ = chore.currentOccurrence;
   return (
     <li>
-      <strong>{chore.name}</strong>{" "}
+      <strong>{chore.name}</strong> <span>({describeSchedule(chore.schedule)})</span>{" "}
       {occ ? <span>{STATUS_LABEL[occ.status]}</span> : <span>Not due yet</span>}
       {occ?.completion && (
         <span>
@@ -63,7 +72,13 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
         </button>
       )}
       {complete.error && <span role="alert"> Could not complete. Try again.</span>}
+      {isAdmin && !editing && (
+        <button type="button" onClick={() => setEditing(true)}>
+          Edit
+        </button>
+      )}
       {isAdmin && <ChoreAdminActions householdId={householdId} chore={chore} />}
+      {editing && <EditChoreForm householdId={householdId} chore={chore} onDone={() => setEditing(false)} />}
     </li>
   );
 }
@@ -112,37 +127,99 @@ function ChoreAdminActions({ householdId, chore }: { householdId: string; chore:
 
 function AddChoreForm({ householdId }: { householdId: string }) {
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [days, setDays] = useState("1");
+  const [formKey, setFormKey] = useState(0);
   const create = useMutation({
-    mutationFn: () =>
-      api(`/households/${householdId}/chores`, {
-        method: "POST",
-        body: JSON.stringify({ name, schedule: { kind: "fixed", rule: { type: "every_n_days", n: Number(days) } } }),
-      }),
+    mutationFn: (body: ChoreFormValues) =>
+      api(`/households/${householdId}/chores`, { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => {
-      setName("");
+      setFormKey((k) => k + 1); // reset the form
       return queryClient.invalidateQueries({ queryKey: ["chores", householdId] });
     },
   });
 
+  return (
+    <ChoreForm
+      key={formKey}
+      label="Add chore"
+      initialName=""
+      initialSchedule={EMPTY_DRAFT}
+      pending={create.isPending}
+      error={create.error ? "Could not add the chore." : null}
+      onSubmit={(values) => create.mutate(values)}
+    />
+  );
+}
+
+/**
+ * Edits a Chore's name and Schedule. The backend applies a new Schedule only
+ * to Occurrences not yet created; the current one keeps its due date and Window.
+ */
+function EditChoreForm({ householdId, chore, onDone }: { householdId: string; chore: Chore; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const save = useMutation({
+    mutationFn: (body: ChoreFormValues) =>
+      api(`/households/${householdId}/chores/${chore.id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["chores", householdId] });
+      onDone();
+    },
+  });
+
+  return (
+    <ChoreForm
+      label="Edit chore"
+      submitText="Save"
+      initialName={chore.name}
+      initialSchedule={draftFromSchedule(chore.schedule)}
+      pending={save.isPending}
+      error={save.error ? "Could not save the chore." : null}
+      onSubmit={(values) => save.mutate(values)}
+      onCancel={onDone}
+    />
+  );
+}
+
+type ChoreFormValues = { name: string; schedule: ReturnType<typeof scheduleFromDraft> };
+
+function ChoreForm(props: {
+  label: string;
+  submitText?: string;
+  initialName: string;
+  initialSchedule: ScheduleDraft;
+  pending: boolean;
+  error: string | null;
+  onSubmit: (values: ChoreFormValues) => void;
+  onCancel?: () => void;
+}) {
+  const [name, setName] = useState(props.initialName);
+  const [schedule, setSchedule] = useState(props.initialSchedule);
+  const [invalid, setInvalid] = useState<string | null>(null);
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    create.mutate();
+    if (schedule.repeats === "weekdays" && schedule.weekdays.length === 0) {
+      setInvalid("Choose at least one weekday.");
+      return;
+    }
+    setInvalid(null);
+    props.onSubmit({ name, schedule: scheduleFromDraft(schedule) });
   };
 
   return (
-    <form onSubmit={submit}>
+    <form aria-label={props.label} onSubmit={submit}>
       <label>
         Chore name <input value={name} onChange={(e) => setName(e.target.value)} required />
       </label>{" "}
-      <label>
-        Every N days <input type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} required />
-      </label>{" "}
-      <button type="submit" disabled={create.isPending}>
-        Add chore
+      <ScheduleFields draft={schedule} onChange={setSchedule} />{" "}
+      <button type="submit" disabled={props.pending}>
+        {props.submitText ?? props.label}
       </button>
-      {create.error && <span role="alert"> Could not add the chore.</span>}
+      {props.onCancel && (
+        <button type="button" onClick={props.onCancel}>
+          Cancel
+        </button>
+      )}
+      {(invalid ?? props.error) && <span role="alert"> {invalid ?? props.error}</span>}
     </form>
   );
 }

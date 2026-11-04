@@ -82,7 +82,7 @@ function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: strin
     chore.schedule,
     timeZone,
     occurrences.find((o) => o.status === "open") ?? null,
-    occurrences.at(-1)?.windowStart ?? null,
+    occurrences.at(-1) ?? null,
   );
   return { id: chore.id, name: chore.name, schedule: chore.schedule, currentOccurrence, nextDue };
 }

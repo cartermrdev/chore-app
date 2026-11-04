@@ -40,9 +40,23 @@ export type Completion = {
   late: boolean;
 };
 
+/** ISO weekday: 1 = Monday … 7 = Sunday. */
+export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type FixedRule =
+  | { type: "every_n_days"; n: number }
+  | { type: "weekdays"; weekdays: Weekday[]; n: number }
+  | { type: "monthly"; day: number };
+
+/** Mirrors the backend Schedule engine's definition. */
+export type Schedule =
+  | { kind: "fixed"; startDate: string; rule: FixedRule }
+  | { kind: "one_off"; dueDate: string };
+
 export type Chore = {
   id: string;
   name: string;
+  schedule: Schedule;
   currentOccurrence: {
     id: string;
     dueDate: string;
