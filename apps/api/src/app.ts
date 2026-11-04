@@ -3,7 +3,7 @@ import type { Clock } from "./clock";
 import { assertValidConfig, publicOrigin, type Config } from "./config";
 import type { Db } from "./db/client";
 import { testRoutes } from "./testing/routes";
-import { meRoutes } from "./households/routes";
+import { householdRoutes, meRoutes } from "./households/routes";
 import type { CurrentMembership } from "./households/membership";
 import { choreRoutes } from "./chores/routes";
 import { tagRoutes } from "./tags/routes";
@@ -12,6 +12,8 @@ import { consoleMailer, type Mailer } from "./auth/mailer";
 import { createWebAuthn, type WebAuthn } from "./auth/webauthn";
 import { authRoutes } from "./auth/routes";
 import { householdInviteRoutes, inviteRoutes } from "./invites/routes";
+import { completionRoutes, occurrenceRoutes } from "./completions/routes";
+import { personRoutes } from "./households/persons";
 
 /** Everything the app needs from the outside world. Tests inject their own. */
 export type Deps = {
@@ -55,11 +57,15 @@ export function createApp(input: AppInput) {
   api.get("/health", (c) => c.json({ ok: true }));
   api.route("/me", meRoutes);
   api.route("/households/:householdId/chores", choreRoutes);
+  api.route("/households/:householdId", householdRoutes);
   api.route("/households/:householdId/tags", tagRoutes);
   api.route("/scan", scanRoutes);
   api.route("/auth", authRoutes);
   api.route("/invites", inviteRoutes);
   api.route("/households/:householdId/invites", householdInviteRoutes);
+  api.route("/households/:householdId/persons", personRoutes);
+  api.route("/completions", completionRoutes);
+  api.route("/occurrences", occurrenceRoutes);
   if (deps.config.testAuth) api.route("/test", testRoutes);
 
   app.route("/api", api);

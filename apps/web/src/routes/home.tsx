@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { api, ApiError, type Me } from "../api";
 import { signOut } from "../auth";
 import { ChoreList } from "./chores";
@@ -40,6 +40,8 @@ export function HomePage() {
       {me.data.memberships.map((m) => (
         <article key={m.household.id}>
           <h1>{m.household.name}</h1>
+          <p>Time zone: {m.household.timeZone}</p>
+          {m.role === "admin" && <HouseholdSettings householdId={m.household.id} timeZone={m.household.timeZone} />}
           <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
           {m.role === "admin" && <TagManager householdId={m.household.id} />}
           {m.role === "admin" && <InviteForm householdId={m.household.id} />}
@@ -76,6 +78,38 @@ function EmailSetting({ email }: { email: string | null }) {
       {save.isError && !(save.error instanceof ApiError && save.error.status === 409) && (
         <span role="alert"> Could not save.</span>
       )}
+    </form>
+  );
+}
+
+/** Admin-only: the Household's time zone (an IANA name such as Europe/London). */
+function HouseholdSettings({ householdId, timeZone }: { householdId: string; timeZone: string }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(timeZone);
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/households/${householdId}`, { method: "PATCH", body: JSON.stringify({ timeZone: value.trim() }) }),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["me"] }),
+        queryClient.invalidateQueries({ queryKey: ["chores", householdId] }),
+      ]),
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate();
+  };
+
+  return (
+    <form aria-label="Household settings" onSubmit={submit}>
+      <label>
+        Time zone <input value={value} onChange={(e) => setValue(e.target.value)} required />
+      </label>{" "}
+      <button type="submit" disabled={save.isPending}>
+        Save time zone
+      </button>
+      {save.error && <span role="alert"> That isn't a known time zone.</span>}
     </form>
   );
 }

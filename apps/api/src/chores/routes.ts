@@ -5,6 +5,7 @@ import { requireAdmin, requireMembership } from "../households/membership";
 import { localDateOf } from "../schedule/calendar";
 import { parseSchedule } from "../schedule/engine";
 import { getChore, listChores } from "./views";
+import { archiveChore, deleteChore } from "./lifecycle";
 import { completeDueOccurrence } from "../completions/service";
 
 /** /api/households/:householdId/chores */
@@ -27,10 +28,13 @@ export const choreRoutes = new Hono<AppEnv>()
     if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 200) {
       return c.json({ error: "idempotencyKey is required" }, 400);
     }
+    // Optional: an Admin records on someone else's behalf (the session Person is the Recorder).
+    const completerId = body?.completerId ?? c.var.personId;
+    if (typeof completerId !== "string") return c.json({ error: "completerId must be a Person id" }, 400);
     const result = await completeDueOccurrence(c.var.deps, {
       householdId: c.var.membership.householdId,
       choreId: c.req.param("choreId"),
-      completerId: c.var.personId,
+      completerId,
       recorderId: c.var.personId,
       method: "manual",
       idempotencyKey,
@@ -43,10 +47,41 @@ export const choreRoutes = new Hono<AppEnv>()
       case "chore_not_found":
         return c.json({ error: "not_found" }, 404);
       case "not_a_member":
-        return c.json({ error: "not_found" }, 404);
+        // The Recorder passed requireMembership, so it's the Completer who isn't a current Person here.
+        return c.json({ error: "completer_not_a_member" }, 400);
       case "forbidden":
         return c.json({ error: "forbidden" }, 403);
     }
+  })
+  /**
+   * Edit a Chore's name and/or Schedule. The new Schedule replaces the old one
+   * and applies only to Occurrences not yet created (see the materialiser).
+   */
+  .patch("/:choreId", requireAdmin, async (c) => {
+    const { db, clock } = c.var.deps;
+    const { householdId, timeZone } = c.var.membership;
+    const body = await c.req.json().catch(() => ({}));
+
+    let name: string | null = null;
+    if (body?.name !== undefined) {
+      name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) return c.json({ error: "name is required" }, 400);
+    }
+    let schedule = null;
+    if (body?.schedule !== undefined) {
+      const parsed = parseSchedule(body.schedule, localDateOf(clock.now(), timeZone));
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      schedule = parsed.schedule;
+    }
+
+    const [row] = await db`
+      UPDATE chores SET
+        name = COALESCE(${name}, name),
+        schedule = COALESCE(${schedule}::jsonb, schedule)
+      WHERE household_id = ${householdId} AND id = ${c.req.param("choreId")}::uuid AND archived_at IS NULL
+      RETURNING id, name, schedule`.catch(() => []);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    return c.json({ id: row.id, name: row.name, schedule: row.schedule });
   })
   .post("/", requireAdmin, async (c) => {
     const { db, clock } = c.var.deps;
@@ -64,4 +99,21 @@ export const choreRoutes = new Hono<AppEnv>()
       VALUES (${householdId}, ${name}, ${parsed.schedule}, ${now})
       RETURNING id, name, schedule`;
     return c.json({ id: row.id, name: row.name, schedule: row.schedule }, 201);
+  })
+  .post("/:choreId/archive", requireAdmin, async (c) => {
+    const archived = await archiveChore(c.var.deps, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (!archived) return c.json({ error: "not_found" }, 404);
+    return c.json(archived);
+  })
+  .delete("/:choreId", requireAdmin, async (c) => {
+    const result = await deleteChore(c.var.deps.db, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (result.ok) return c.body(null, 204);
+    if (result.error === "has_history") return c.json({ error: "has_history" }, 409);
+    return c.json({ error: "not_found" }, 404);
   });

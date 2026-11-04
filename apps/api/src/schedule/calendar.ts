@@ -31,6 +31,22 @@ export function daysBetween(a: LocalDate, b: LocalDate): number {
   return Math.round((toUtcMidnight(b) - toUtcMidnight(a)) / 86_400_000);
 }
 
+/** The given day of a month (1-based month), clamped to the month's last day. */
+export function dayOfMonth(year: number, month: number, day: number): LocalDate {
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month - 1, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
+/** ISO weekday of the date: 1 = Monday … 7 = Sunday. */
+export function isoWeekday(date: LocalDate): number {
+  return ((new Date(toUtcMidnight(date)).getUTCDay() + 6) % 7) + 1;
+}
+
+/** The Monday on or before the date. */
+export function mondayOf(date: LocalDate): LocalDate {
+  return addDays(date, 1 - isoWeekday(date));
+}
+
 export function compareDates(a: LocalDate, b: LocalDate): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type Chore, type Tag } from "../api";
+import { api, ApiError, type Chore, type Tag } from "../api";
 
 /**
  * Admin-only: create Tags, point them at a Chore (or none) and copy the URL
@@ -48,6 +48,11 @@ function TagRow({ householdId, tag, chores }: { householdId: string; tag: Tag; c
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tags", householdId] }),
   });
 
+  const remove = useMutation({
+    mutationFn: () => api(`/households/${householdId}/tags/${tag.id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tags", householdId] }),
+  });
+
   const copy = async () => {
     await navigator.clipboard.writeText(url);
     setCopied(true);
@@ -74,7 +79,17 @@ function TagRow({ householdId, tag, chores }: { householdId: string; tag: Tag; c
           ))}
         </select>
       </label>
-      {link.error && <span role="alert"> Could not link the tag.</span>}
+      {link.error && <span role="alert"> Could not link the tag.</span>}{" "}
+      <button type="button" disabled={remove.isPending} onClick={() => remove.mutate()}>
+        Delete
+      </button>
+      {remove.error && (
+        <span role="alert">
+          {remove.error instanceof ApiError && remove.error.status === 409
+            ? " This tag has history, so it can't be deleted. Set its chore to (none) instead."
+            : " Could not delete the tag."}
+        </span>
+      )}
     </li>
   );
 }
