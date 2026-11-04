@@ -9,8 +9,9 @@
  * - at most one active (non-voided) Completion per Occurrence, enforced by
  *   the partial unique index `completions_one_active_per_occurrence`, so a
  *   concurrent loser gets `already_completed` naming the winner;
- * - idempotency: the first result for (Recorder, idempotencyKey) is stored
- *   and returned verbatim for every repeat, which creates nothing new;
+ * - idempotency: the first result for (Household, Recorder, idempotencyKey)
+ *   is stored and returned verbatim for every repeat, which creates nothing
+ *   new (scoped to the Household, ADR 0002);
  * - Late is derived: completedAt after the Due Time (+30 min Grace Period
  *   for Time Slot Occurrences).
  *
@@ -166,22 +167,22 @@ async function runCompletion(
 
   return db.begin(async (tx) => {
     const claimed = await tx`
-      INSERT INTO completion_requests (recorder_id, idempotency_key, result, created_at)
-      VALUES (${req.recorderId}, ${idempotencyKey}, NULL, ${now})
+      INSERT INTO completion_requests (household_id, recorder_id, idempotency_key, result, created_at)
+      VALUES (${req.householdId}, ${req.recorderId}, ${idempotencyKey}, NULL, ${now})
       ON CONFLICT DO NOTHING
       RETURNING 1`;
     if (claimed.length === 0) {
       // A repeat: the original committed before our insert returned (it waits on the key).
       const [stored] = await tx`
         SELECT result FROM completion_requests
-        WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
+        WHERE household_id = ${req.householdId} AND recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
       return stored.result as CompleteResult;
     }
 
     const result = await work({ tx, chore, timeZone: completer.timeZone, now });
     await tx`
       UPDATE completion_requests SET result = ${result}
-      WHERE recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
+      WHERE household_id = ${req.householdId} AND recorder_id = ${req.recorderId} AND idempotency_key = ${idempotencyKey}`;
     return result;
   });
 }

@@ -111,6 +111,22 @@ describe("Manual Completion", () => {
     ]);
   });
 
+  test("an idempotency key is scoped to the Household: reusing it in another Household records there", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const a = await household(1);
+    const b = await household(1);
+    const invite = await (await b.admin.post(b.base.replace("/chores", "/invites"), { displayName: "Sam" })).json();
+    expect((await a.standard.post(`/api/invites/${invite.token}/join`)).status).toBe(200);
+    expect((await a.complete(a.standard, "same-key")).status).toBe(200);
+
+    const res = await a.standard.post(`${b.base}/${b.chore.id}/complete`, { idempotencyKey: "same-key" });
+
+    expect(await res.json()).toMatchObject({
+      outcome: "completed",
+      completion: { choreId: b.chore.id, completer: { id: a.sam.id } },
+    });
+  });
+
   test("concurrent first requests with the same idempotency key create one Completion", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household(1);

@@ -179,7 +179,7 @@ async function adminHouseholds(db: Db, personId: string): Promise<HouseholdRef[]
 }
 
 /**
- * Idempotency keys are scoped per Recorder by the Completion service. Prefix
+ * Idempotency keys are scoped per Household and Recorder by the Completion service. Prefix
  * scan keys so a scan can never replay a Manual request's stored result.
  */
 function scanKey(req: Pick<ScanRequest, "tagId" | "idempotencyKey">): string {
