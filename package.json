@@ -1,0 +1,21 @@
+{
+  "name": "chore-app",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "db:up": "docker compose up -d --wait db",
+    "dev": "bun scripts/dev.ts",
+    "seed": "bun apps/api/scripts/seed.ts",
+    "migrate": "bun apps/api/scripts/migrate.ts",
+    "test": "bun run db:up && bun test ./apps",
+    "test:e2e": "bun run db:up && bun scripts/e2e.ts",
+    "test:all": "bun run test && bun run test:e2e",
+    "typecheck": "bun run --filter '*' typecheck"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
