@@ -94,10 +94,12 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
           {occ.timeSlot ? `${occ.timeSlot}: ` : ""}
           {STATUS_LABEL[occ.status]}
           {occ.excuse ? ` · Excused: ${occ.excuse.note}` : ""}
+          {occ.skippedByPause ? " · Paused" : ""}
         </span>
       ) : (
         <span>Not due yet</span>
       )}
+      {chore.paused && <span> · Paused {chore.paused.until ? `until ${chore.paused.until}` : "indefinitely"}</span>}
       {assignee && <span> · Assigned to {assignee.displayName}</span>}
       {occ?.completion && (
         <span>
@@ -130,7 +132,7 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
             disabled={completeEarly.isPending}
             onClick={() => completeEarly.mutate(nextDue)}
           >
-            Complete early
+            {chore.paused ? "Complete anyway" : "Complete early"}
           </button>
         )
       )}

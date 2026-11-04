@@ -96,6 +96,18 @@ function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
           {completeEarly(result.earlyCompletionOffered, result.nextDue)}
         </Screen>
       );
+    case "paused":
+      // "Complete anyway" is an Early Completion of the next Occurrence; nothing was recorded by the scan.
+      return (
+        <Screen
+          title={`${result.chore.name} is paused${result.until ? ` until ${formatDate(result.until)}` : ""}`}
+        >
+          <p>Nothing has been recorded.</p>
+          {result.completeAnywayOffered && result.nextDue && (
+            <CompleteEarly tagId={tagId} next={result.nextDue} onDone={onEarly} label="Complete anyway" />
+          )}
+        </Screen>
+      );
     case "tag_unlinked":
       return (
         <Screen title="This tag isn't linked to a chore">
@@ -134,8 +146,11 @@ function CompleteEarly({
   tagId,
   next,
   onDone,
+  label = "Complete early",
 }: {
   tagId: string;
+  /** The button text: "Complete early", or "Complete anyway" on a paused Chore. */
+  label?: string;
   /** The Occurrence shown as next due: the one this request names. */
   next: NonNullable<Chore["nextDue"]>;
   onDone: (result: ScanOutcome) => void;
@@ -155,7 +170,7 @@ function CompleteEarly({
   return (
     <>
       <button type="button" disabled={early.isPending} onClick={() => early.mutate()}>
-        {early.isPending ? "Recording…" : "Complete early"}
+        {early.isPending ? "Recording…" : label}
       </button>
       {early.isError && <p role="alert">Couldn't record it. Nothing has been recorded yet; try again.</p>}
     </>

@@ -88,9 +88,29 @@ export type Chore = {
     completion: Completion | null;
     voidedCompletions: VoidedCompletion[];
     excuse: Excuse | null;
+    /** Set when a Pause Skipped it (excuse is then null). */
+    skippedByPause: { id: string; choreId: string | null; startDate: string; endDate: string | null } | null;
   } | null;
   /** The next Occurrence; what "Complete early" names in its request. */
   nextDue: { dueDate: string; timeSlot: string | null; dueTime: string } | null;
+  /** Set while a Pause covers today; `until` is the last paused date (null: indefinite). */
+  paused: { until: string | null } | null;
+};
+
+/** GET /households/:id/pauses. Mirrors PauseView in apps/api/src/pauses/service.ts. */
+export type Pause = {
+  id: string;
+  /** null: a Household Pause. */
+  chore: ChoreRef | null;
+  startDate: string;
+  /** Last paused date (inclusive); null: indefinite. */
+  endDate: string | null;
+  plannedEndDate: string | null;
+  createdAt: string;
+  createdBy: PersonRef;
+  endedEarlyAt: string | null;
+  endedEarlyBy: PersonRef | null;
+  state: "upcoming" | "current" | "past";
 };
 
 export type CompleteResult =
@@ -117,6 +137,13 @@ export type ScanOutcome =
       earlyCompletionOffered: boolean;
     }
   | { outcome: "nothing_due"; chore: ChoreRef; nextDue: Chore["nextDue"]; earlyCompletionOffered: boolean }
+  | {
+      outcome: "paused";
+      chore: ChoreRef;
+      until: string | null;
+      nextDue: Chore["nextDue"];
+      completeAnywayOffered: boolean;
+    }
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
   | { outcome: "tag_unregistered"; canClaim: boolean; households: { id: string; name: string }[] }
   | { outcome: "not_a_member" };
