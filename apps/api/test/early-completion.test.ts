@@ -199,6 +199,20 @@ describe("Early Completion in the app", () => {
     });
   });
 
+  test("an Occurrence created by an Early Completion gets the Chore's Assignee", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const h = await household({ kind: "interval", periodDays: 7 });
+    await h.admin.patch(`${h.base}/${h.chore.id}`, { assigneeId: h.sam.id });
+    await h.complete(h.standard, "first");
+
+    const res = await (await h.completeEarly(h.admin, "early", "2026-03-08")).json();
+
+    expect(res).toMatchObject({
+      outcome: "completed",
+      completion: { early: true, completer: { displayName: "Alex" }, assignee: { displayName: "Sam" } },
+    });
+  });
+
   test("a dueDate is required, and outsiders get 404", async () => {
     t.clock.set("2026-03-01T09:00:00Z");
     const h = await household(everyNDays(1));
