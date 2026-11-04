@@ -73,6 +73,20 @@ export async function householdHistory({ db, membership, now }: Scope, range: Da
  * One Person's history, or null when the Person has never had a Membership in
  * this Household (current or ended).
  */
+/** A Person whose history can be viewed: anyone who ever had a Membership in the Household. */
+export type HistoryPerson = { id: string; displayName: string; current: boolean };
+
+/** Everyone who ever had a Membership in the Household, current ones first, then by name. */
+export async function historyPersons(db: Db, householdId: string): Promise<HistoryPerson[]> {
+  const rows = await db`
+    SELECT p.id, p.display_name, bool_or(m.ended_at IS NULL) AS current
+    FROM memberships m JOIN persons p ON p.id = m.person_id
+    WHERE m.household_id = ${householdId}
+    GROUP BY p.id, p.display_name
+    ORDER BY bool_or(m.ended_at IS NULL) DESC, p.display_name, p.id`;
+  return rows.map((r: any) => ({ id: r.id, displayName: r.display_name, current: r.current }));
+}
+
 export async function personHistory(
   { db, membership, now }: Scope,
   personId: string,

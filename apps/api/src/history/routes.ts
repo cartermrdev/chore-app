@@ -3,7 +3,7 @@ import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
 import { requireMembership } from "../households/membership";
 import { addDays, compareDates, daysBetween, isLocalDate, localDateOf } from "../schedule/calendar";
-import { householdHistory, personHistory, type DateRange } from "./service";
+import { historyPersons, householdHistory, personHistory, type DateRange } from "./service";
 
 /** The longest range one request may cover, in days. */
 export const MAX_RANGE_DAYS = 366;
@@ -13,6 +13,9 @@ export const MAX_RANGE_DAYS = 366;
  * Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD, inclusive local dates in the Household zone.
  *   Default: the 7 days ending today. 400 invalid_range if malformed, to < from, or longer than 366 days.
  * GET /                    -> HouseholdHistory: every Completion made in the range, voided ones included, newest first.
+ * GET /persons            -> { persons: { id, displayName, current }[] }: everyone who ever had a Membership
+ *                             here (`current` false once it ended), for choosing whose history to view.
+ *                             Listing an ended Membership grants it nothing.
  * GET /persons/:personId   -> PersonHistory; 404 if the Person never had a Membership here.
  */
 export const historyRoutes = new Hono<AppEnv>()
@@ -22,6 +25,9 @@ export const historyRoutes = new Hono<AppEnv>()
     if (!range) return c.json({ error: "invalid_range" }, 400);
     const { db, clock } = c.var.deps;
     return c.json(await householdHistory({ db, membership: c.var.membership, now: clock.now() }, range));
+  })
+  .get("/persons", async (c) => {
+    return c.json({ persons: await historyPersons(c.var.deps.db, c.var.membership.householdId) });
   })
   .get("/persons/:personId", async (c) => {
     const range = rangeOf(c.req.query("from"), c.req.query("to"), today(c));

@@ -163,6 +163,24 @@ describe("History", () => {
       expect(all.completions).toMatchObject([{ completer: { id: h.sam.id, displayName: "Sam" } }]);
     });
 
+    test("the Person picker lists everyone who ever had a Membership, ended ones included, without granting them access", async () => {
+      const h = await household();
+      expect((await h.admin.delete(`${h.base}/persons/${h.sam.id}`)).status).toBe(204);
+      await t.seed({ adminName: "Stranger" });
+
+      const res = await h.other.get(`${h.base}/history/persons`);
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        persons: [
+          { id: h.adminPerson.id, displayName: "Alex", current: true },
+          { id: h.kim.id, displayName: "Kim", current: true },
+          { id: h.sam.id, displayName: "Sam", current: false },
+        ],
+      });
+      expect((await h.standard.get(`${h.base}/history/persons`)).status).toBe(404);
+    });
+
     test("a Person who never belonged to the Household gets 404", async () => {
       const h = await household();
       const elsewhere = await t.seed({ adminName: "Stranger" });

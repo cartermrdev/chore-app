@@ -166,6 +166,9 @@ export type HistoryCompletion = {
   voided: { at: string; by: PersonRef } | null;
 };
 
+/** GET /households/:id/history/persons: everyone who ever had a Membership here. */
+export type HistoryPerson = { id: string; displayName: string; current: boolean };
+
 /** GET /households/:id/history */
 export type HouseholdHistory = { from: string; to: string; completions: HistoryCompletion[] };
 

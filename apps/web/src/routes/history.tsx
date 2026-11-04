@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type AssignedOutcome, type HistoryCompletion, type HouseholdHistory, type PersonHistory, type PersonRef } from "../api";
-import { useHouseholdPersons } from "./corrections";
+import { api, type AssignedOutcome, type HistoryCompletion, type HistoryPerson, type HouseholdHistory, type PersonHistory, type PersonRef } from "../api";
 
 const OUTCOME_LABEL: Record<AssignedOutcome, string> = {
   on_time: "Completed on time",
@@ -52,7 +51,7 @@ export function HistoryViews({ householdId }: { householdId: string }) {
         {household.data && household.data.completions.length === 0 && <p>No completions.</p>}
         {household.data && household.data.completions.length > 0 && <CompletionTable completions={household.data.completions} />}
       </section>
-      <PersonHistoryView householdId={householdId} qs={qs} rangeKey={[from, to]} seen={household.data?.completions ?? []} />
+      <PersonHistoryView householdId={householdId} qs={qs} rangeKey={[from, to]} />
     </>
   );
 }
@@ -61,19 +60,17 @@ function PersonHistoryView({
   householdId,
   qs,
   rangeKey,
-  seen,
 }: {
   householdId: string;
   qs: string;
   rangeKey: string[];
-  seen: HistoryCompletion[];
 }) {
   const [personId, setPersonId] = useState("");
-  const persons = useHouseholdPersons(householdId, true);
-  // Current Persons, plus anyone in the Household history (e.g. an ended Membership).
-  const options = new Map<string, string>();
-  for (const p of persons.data?.persons ?? []) options.set(p.id, p.displayName);
-  for (const c of seen) for (const p of [c.completer, c.occurrence.assignee]) if (p && !options.has(p.id)) options.set(p.id, p.displayName);
+  // Everyone who ever had a Membership here, so an ended one can be chosen even with nothing in range.
+  const persons = useQuery({
+    queryKey: ["history", householdId, "persons"],
+    queryFn: () => api<{ persons: HistoryPerson[] }>(`/households/${householdId}/history/persons`),
+  });
 
   const history = useQuery({
     queryKey: ["history", householdId, "person", personId, ...rangeKey],
@@ -88,9 +85,10 @@ function PersonHistoryView({
         Person{" "}
         <select value={personId} onChange={(e) => setPersonId(e.target.value)}>
           <option value="">Choose…</option>
-          {[...options].map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
+          {persons.data?.persons.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.displayName}
+              {p.current ? "" : " (left)"}
             </option>
           ))}
         </select>
