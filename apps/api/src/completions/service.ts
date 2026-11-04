@@ -46,6 +46,8 @@ export type CompletionSummary = {
   timeSlot: string | null;
   completer: PersonRef;
   recorder: PersonRef;
+  /** The Occurrence's Assignee (who was expected to do it), which may differ from the Completer. */
+  assignee: PersonRef | null;
   method: Method;
   tagId: string | null;
   completedAt: string;
@@ -196,12 +198,14 @@ async function loadSummary(
     SELECT c.id, c.occurrence_id, o.chore_id, ch.name AS chore_name, o.due_date::text AS due_date, o.time_slot,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name,
+           ap.id AS assignee_id, ap.display_name AS assignee_name,
            c.method, c.tag_id, c.completed_at, c.late
     FROM completions c
     JOIN occurrences o ON o.id = c.occurrence_id
     JOIN chores ch ON ch.id = o.chore_id
     JOIN persons cp ON cp.id = c.completer_id
     JOIN persons rp ON rp.id = c.recorder_id
+    LEFT JOIN persons ap ON ap.id = o.assignee_id
     WHERE c.voided_at IS NULL
       AND (${completionId}::uuid IS NULL OR c.id = ${completionId}::uuid)
       AND (${occurrenceId}::uuid IS NULL OR c.occurrence_id = ${occurrenceId}::uuid)
@@ -216,6 +220,7 @@ async function loadSummary(
     timeSlot: r.time_slot,
     completer: { id: r.completer_id, displayName: r.completer_name },
     recorder: { id: r.recorder_id, displayName: r.recorder_name },
+    assignee: r.assignee_id ? { id: r.assignee_id, displayName: r.assignee_name } : null,
     method: r.method,
     tagId: r.tag_id,
     completedAt: new Date(r.completed_at).toISOString(),

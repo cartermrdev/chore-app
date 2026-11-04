@@ -31,7 +31,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
   const choreId = scope.choreId ?? null;
 
   const chores = await db`
-    SELECT c.id, c.schedule, last.window_start AS last_start, last.window_end AS last_end
+    SELECT c.id, c.schedule, c.assignee_id, last.window_start AS last_start, last.window_end AS last_end
     FROM chores c
     LEFT JOIN LATERAL (
       SELECT o.window_start, o.window_end FROM occurrences o
@@ -40,6 +40,7 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
     WHERE c.household_id = ${householdId} AND c.archived_at IS NULL
       AND (${choreId}::uuid IS NULL OR c.id = ${choreId}::uuid)`;
 
+  let members: Set<string> | undefined;
   for (const chore of chores) {
     const planned = occurrencesUpTo({
       schedule: chore.schedule as Schedule,
@@ -50,17 +51,23 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       horizon: now,
     });
     if (planned.length === 0) continue;
-    const rows = planned.map((p) => ({
-      chore_id: chore.id,
-      household_id: householdId,
-      due_date: p.dueDate,
-      time_slot: p.timeSlot,
-      window_start: p.windowStart,
-      due_time: p.dueTime,
-      window_end: p.windowEnd,
-      status: "open",
-      created_at: now,
-    }));
+    const current = (members ??= await currentMembers(db, householdId));
+    const rows = planned.map((p) => {
+      const assignee = assigneeFor(chore.schedule as Schedule, chore.assignee_id, p.timeSlot);
+      return {
+        chore_id: chore.id,
+        household_id: householdId,
+        due_date: p.dueDate,
+        time_slot: p.timeSlot,
+        window_start: p.windowStart,
+        due_time: p.dueTime,
+        window_end: p.windowEnd,
+        // An Assignee whose Membership has since ended is not copied.
+        assignee_id: assignee && current.has(assignee) ? assignee : null,
+        status: "open",
+        created_at: now,
+      };
+    });
     await db`INSERT INTO occurrences ${db(rows)} ON CONFLICT DO NOTHING`;
   }
 
@@ -72,7 +79,24 @@ export async function materialise(db: Db, scope: MaterialiseScope): Promise<void
       AND (${choreId}::uuid IS NULL OR chore_id = ${choreId}::uuid)`;
 }
 
-export type StoredWindow = { windowStart: Date; windowEnd: Date | null };
+/**
+ * The Assignee to copy onto a new Occurrence: its Time Slot's when the
+ * Schedule has slots (an unassigned slot stays unassigned), else the Chore's.
+ */
+export function assigneeFor(schedule: Schedule, choreAssigneeId: string | null, timeSlot: string | null): string | null {
+  if (schedule.kind === "fixed" && schedule.slots?.length) {
+    return schedule.slots.find((s) => s.name === timeSlot)?.assigneeId ?? null;
+  }
+  return choreAssigneeId;
+}
+
+async function currentMembers(db: Db, householdId: string): Promise<Set<string>> {
+  const rows = await db`
+    SELECT person_id FROM memberships WHERE household_id = ${householdId} AND ended_at IS NULL`;
+  return new Set(rows.map((r: any) => r.person_id as string));
+}
+
+export type StoredWindow ={ windowStart: Date; windowEnd: Date | null };
 
 /**
  * The `after` to plan new Occurrences from, given the latest stored one:

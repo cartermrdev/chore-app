@@ -109,3 +109,29 @@ export function startOfLocalDay(date: LocalDate, timeZone: string): Date {
   if (first === undefined) throw new Error(`Cannot find the start of ${date} in ${timeZone}`);
   return new Date(first);
 }
+
+/** A local time of day, "HH:MM" (24-hour, 00:00–23:59). */
+export type LocalTime = string;
+
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+export function isLocalTime(value: unknown): value is LocalTime {
+  return typeof value === "string" && TIME_RE.test(value);
+}
+
+/**
+ * The instant at which the local date and time occur in the time zone.
+ * A time the clocks skip (spring DST gap) moves forward by the gap's length;
+ * a time that occurs twice (autumn) resolves to its first occurrence.
+ */
+export function localDateTimeToInstant(date: LocalDate, time: LocalTime, timeZone: string): Date {
+  const t = TIME_RE.exec(time);
+  if (!t) throw new Error(`Not a LocalTime: ${time}`);
+  const wall = toUtcMidnight(date) + (+t[1]! * 60 + +t[2]!) * 60_000;
+  const before = wall - offsetAt(wall - 86_400_000, timeZone);
+  const after = wall - offsetAt(wall + 86_400_000, timeZone);
+  const showsWall = (instant: number) => instant + offsetAt(instant, timeZone) === wall;
+  const valid = [before, after].filter(showsWall).sort((a, b) => a - b);
+  // In a gap neither offset shows the wall time; the pre-transition offset moves it forward.
+  return new Date(valid[0] ?? before);
+}

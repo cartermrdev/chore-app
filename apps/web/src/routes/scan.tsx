@@ -128,11 +128,17 @@ function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "
   }
   return (
     <Screen title={result.chore.name} mark="✓">
-      <p>Credited to {c.completer.displayName}</p>
       <p>
-        {c.late ? "Late" : "On time"}
+        Credited to {c.completer.displayName} · {c.late ? "Late" : "On time"}
         <NextDue nextDue={result.nextDue} prefix=" · " />
       </p>
+      {(c.timeSlot || c.assignee) && (
+        <p>
+          {c.timeSlot}
+          {c.timeSlot && c.assignee ? " · " : ""}
+          {c.assignee && `Assigned to ${c.assignee.displayName}`}
+        </p>
+      )}
       <UndoButton completionId={c.id} completedAt={c.completedAt} onUndone={() => setUndone(true)} />
     </Screen>
   );
