@@ -51,6 +51,8 @@ apps/api            Bun + Hono + PostgreSQL backend
   src/completions/    Completion service: the single path that creates a Completion;
                       corrections.ts: Undo, Void and Excuse (/api/completions, /api/occurrences)
   src/tags/           Tag service and Admin routes (random ids, link/re-point, claim, delete)
+  src/pauses/         Chore and Household Pauses (kept as history)
+  src/history/        History views: Household-wide and per-Person (/households/:id/history)
   src/scan/           Scan resolver and POST /api/scan/:tagId (the /nfc/{tagId} page's request)
   src/testing/        test-only /api/test/* endpoints
   scripts/            seed and migrate CLIs

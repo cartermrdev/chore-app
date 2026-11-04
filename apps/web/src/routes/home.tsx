@@ -8,6 +8,7 @@ import { InviteForm } from "./invites";
 import { HouseholdSwitcher, MembershipManager, useCurrentHousehold } from "./memberships";
 import { TagManager } from "./tags";
 import { PauseManager } from "./pauses";
+import { HistoryViews } from "./history";
 
 export function HomePage() {
   const me = useQuery({
@@ -57,6 +58,7 @@ function Households({ me }: { me: Me }) {
         {m.role === "admin" && <HouseholdSettings householdId={m.household.id} timeZone={m.household.timeZone} />}
         <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
         <PauseManager householdId={m.household.id} isAdmin={m.role === "admin"} />
+        <HistoryViews householdId={m.household.id} />
         {m.role === "admin" && <TagManager householdId={m.household.id} />}
         {m.role === "admin" && <MembershipManager householdId={m.household.id} myId={me.person.id} />}
         {m.role === "admin" && <InviteForm householdId={m.household.id} />}

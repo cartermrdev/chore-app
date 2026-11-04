@@ -147,3 +147,45 @@ export type ScanOutcome =
   | { outcome: "tag_unlinked"; householdId: string; canLink: boolean }
   | { outcome: "tag_unregistered"; canClaim: boolean; households: { id: string; name: string }[] }
   | { outcome: "not_a_member" };
+
+/** A Completion in the history views. Mirrors HistoryCompletion in apps/api/src/history/service.ts. */
+export type HistoryCompletion = {
+  id: string;
+  chore: { id: string; name: string };
+  occurrence: { id: string; dueDate: string; timeSlot: string | null; assignee: PersonRef | null };
+  method: "manual" | "nfc";
+  tagId: string | null;
+  completer: PersonRef;
+  recorder: PersonRef;
+  completedAt: string;
+  late: boolean;
+  early: boolean;
+  voided: { at: string; by: PersonRef } | null;
+};
+
+/** GET /households/:id/history */
+export type HouseholdHistory = { from: string; to: string; completions: HistoryCompletion[] };
+
+export type AssignedOutcome = "on_time" | "late" | "by_someone_else" | "missed" | "skipped";
+
+export type SkipReason =
+  | { reason: "excused"; note: string; excusedAt: string; excusedBy: PersonRef }
+  | { reason: "pause"; pause: { id: string; choreId: string | null; startDate: string; endDate: string | null } };
+
+/** GET /households/:id/history/persons/:personId */
+export type PersonHistory = {
+  person: PersonRef;
+  from: string;
+  to: string;
+  assigned: {
+    occurrenceId: string;
+    chore: { id: string; name: string };
+    dueDate: string;
+    timeSlot: string | null;
+    dueTime: string;
+    outcome: AssignedOutcome;
+    completion: HistoryCompletion | null;
+    skip: SkipReason | null;
+  }[];
+  otherCompletions: HistoryCompletion[];
+};
