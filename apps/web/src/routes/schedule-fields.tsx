@@ -3,7 +3,7 @@
 // Schedule, add a field to the draft, its inputs to ScheduleFields, and its
 // conversion to draftFromSchedule/scheduleFromDraft.
 import { useId } from "react";
-import type { FixedRule, Member, Schedule, TimeSlot, Weekday } from "../api";
+import type { FixedRule, HouseholdPerson, Schedule, TimeSlot, Weekday } from "../api";
 
 export type Repeats = FixedRule["type"];
 
@@ -98,12 +98,12 @@ function describeRule(rule: FixedRule): string {
 }
 
 /** A select of the Household's Persons, with "(nobody)" for unassigned. */
-export function AssigneeSelect(props: { label: string; value: string; members: Member[]; onChange: (personId: string) => void }) {
+export function AssigneeSelect(props: { label: string; value: string; members: HouseholdPerson[]; onChange: (personId: string) => void }) {
   return (
     <select aria-label={props.label} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
       <option value="">(nobody)</option>
       {props.members.map((m) => (
-        <option key={m.personId} value={m.personId}>
+        <option key={m.id} value={m.id}>
           {m.displayName}
         </option>
       ))}
@@ -112,7 +112,7 @@ export function AssigneeSelect(props: { label: string; value: string; members: M
 }
 
 /** Time Slot rows: name, start time and Assignee, with add and remove buttons. */
-function SlotFields({ slots, members, onChange }: { slots: SlotDraft[]; members: Member[]; onChange: (s: SlotDraft[]) => void }) {
+function SlotFields({ slots, members, onChange }: { slots: SlotDraft[]; members: HouseholdPerson[]; onChange: (s: SlotDraft[]) => void }) {
   const update = (i: number, patch: Partial<SlotDraft>) => onChange(slots.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
     <fieldset>
@@ -158,7 +158,7 @@ export function ScheduleFields({
   onChange,
 }: {
   draft: ScheduleDraft;
-  members: Member[];
+  members: HouseholdPerson[];
   onChange: (d: ScheduleDraft) => void;
 }) {
   const repeatsId = useId();

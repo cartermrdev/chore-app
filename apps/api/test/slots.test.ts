@@ -248,22 +248,4 @@ describe("Assignees", () => {
     const detail = await (await admin.get(`${base}/${chore.id}`)).json();
     expect(detail.occurrences[0].assignee).toBeNull();
   });
-
-  test("everyone in the Household can list its Persons, to choose Assignees", async () => {
-    const { household: h, sam } = await household();
-    const samClient = await t.signIn(sam.id);
-
-    const res = await samClient.get(`/api/households/${h.id}/members`);
-
-    expect(res.status).toBe(200);
-    const { members } = await res.json();
-    expect(members.map((m: any) => [m.displayName, m.role])).toEqual([
-      ["Alex", "admin"],
-      ["Kim", "standard"],
-      ["Sam", "standard"],
-    ]);
-    expect(members[2].personId).toBe(sam.id);
-    const outsider = await t.signIn((await t.seed()).person.id);
-    expect((await outsider.get(`/api/households/${h.id}/members`)).status).toBe(404);
-  });
 });

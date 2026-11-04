@@ -7,6 +7,7 @@ import { parseSchedule, slotAssigneeIds, type Schedule } from "../schedule/engin
 import { currentMemberIds } from "../households/membership";
 import type { Db } from "../db/client";
 import { getChore, listChores, personRef } from "./views";
+import { archiveChore, deleteChore } from "./lifecycle";
 import { completeDueOccurrence } from "../completions/service";
 
 /** /api/households/:householdId/chores */
@@ -29,10 +30,13 @@ export const choreRoutes = new Hono<AppEnv>()
     if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 200) {
       return c.json({ error: "idempotencyKey is required" }, 400);
     }
+    // Optional: an Admin records on someone else's behalf (the session Person is the Recorder).
+    const completerId = body?.completerId ?? c.var.personId;
+    if (typeof completerId !== "string") return c.json({ error: "completerId must be a Person id" }, 400);
     const result = await completeDueOccurrence(c.var.deps, {
       householdId: c.var.membership.householdId,
       choreId: c.req.param("choreId"),
-      completerId: c.var.personId,
+      completerId,
       recorderId: c.var.personId,
       method: "manual",
       idempotencyKey,
@@ -45,7 +49,8 @@ export const choreRoutes = new Hono<AppEnv>()
       case "chore_not_found":
         return c.json({ error: "not_found" }, 404);
       case "not_a_member":
-        return c.json({ error: "not_found" }, 404);
+        // The Recorder passed requireMembership, so it's the Completer who isn't a current Person here.
+        return c.json({ error: "completer_not_a_member" }, 400);
       case "forbidden":
         return c.json({ error: "forbidden" }, 403);
     }
@@ -102,6 +107,23 @@ export const choreRoutes = new Hono<AppEnv>()
       VALUES (${householdId}, ${name}, ${parsed.schedule}, ${body?.assigneeId ?? null}, ${now})
       RETURNING id`;
     return c.json(await choreSummary(db, row.id), 201);
+  })
+  .post("/:choreId/archive", requireAdmin, async (c) => {
+    const archived = await archiveChore(c.var.deps, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (!archived) return c.json({ error: "not_found" }, 404);
+    return c.json(archived);
+  })
+  .delete("/:choreId", requireAdmin, async (c) => {
+    const result = await deleteChore(c.var.deps.db, {
+      householdId: c.var.membership.householdId,
+      choreId: c.req.param("choreId"),
+    });
+    if (result.ok) return c.body(null, 204);
+    if (result.error === "has_history") return c.json({ error: "has_history" }, 409);
+    return c.json({ error: "not_found" }, 404);
   });
 
 /**

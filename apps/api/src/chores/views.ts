@@ -21,6 +21,19 @@ export type CompletionView = {
   late: boolean;
 };
 
+/** A Completion withdrawn by Undo (voidedBy = its Completer) or Void (voidedBy = an Admin). */
+export type VoidedCompletionView = CompletionView & {
+  voidedAt: Date;
+  voidedBy: { id: string; displayName: string };
+};
+
+/** Set when an Admin Excused the Occurrence (status Skipped). Null for Pause-Skipped ones. */
+export type ExcuseView = {
+  note: string;
+  excusedAt: Date;
+  excusedBy: { id: string; displayName: string };
+};
+
 export type OccurrenceView = {
   id: string;
   dueDate: string;
@@ -33,6 +46,9 @@ export type OccurrenceView = {
   assignee: PersonRef | null;
   /** The active (non-voided) Completion, if any. */
   completion: CompletionView | null;
+  /** Voided Completions, oldest first; they stay in history. */
+  voidedCompletions: VoidedCompletionView[];
+  excuse: ExcuseView | null;
 };
 
 export type ChoreView = {
@@ -47,7 +63,8 @@ export type ChoreView = {
   nextDue: NextDue | null;
 };
 
-export type ChoreDetailView = ChoreView & { occurrences: OccurrenceView[] };
+/** `archivedAt` is null for an active Chore; an Archived Chore keeps its history readable here. */
+export type ChoreDetailView = ChoreView & { archivedAt: Date | null; occurrences: OccurrenceView[] };
 
 type Scope = { db: Db; membership: CurrentMembership; now: Date };
 
@@ -68,7 +85,7 @@ export async function listChores({ db, membership, now }: Scope): Promise<ChoreV
 /** One Chore in the Household with all its Occurrences, or null. */
 export async function getChore({ db, membership, now }: Scope, choreId: string): Promise<ChoreDetailView | null> {
   const [chore] = await db`
-    SELECT c.id, c.name, c.schedule, c.assignee_id, ap.display_name AS assignee_name
+    SELECT c.id, c.name, c.schedule, c.archived_at, c.assignee_id, ap.display_name AS assignee_name
     FROM chores c LEFT JOIN persons ap ON ap.id = c.assignee_id
     WHERE c.household_id = ${membership.householdId} AND c.id = ${choreId}::uuid`.catch(() => []);
   if (!chore) return null;
@@ -76,6 +93,7 @@ export async function getChore({ db, membership, now }: Scope, choreId: string):
   const occurrences = await loadOccurrences(db, membership.householdId, choreId);
   return {
     ...toChoreView(chore, occurrences, membership.timeZone, now),
+    archivedAt: chore.archived_at,
     occurrences: occurrences.map(({ choreId: _, ...o }) => o),
   };
 }
@@ -110,14 +128,45 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
            o.window_end, o.status, o.assignee_id, ap.display_name AS assignee_name,
            c.id AS completion_id, c.method, c.tag_id, c.completed_at, c.late,
            cp.id AS completer_id, cp.display_name AS completer_name,
-           rp.id AS recorder_id, rp.display_name AS recorder_name
+           rp.id AS recorder_id, rp.display_name AS recorder_name,
+           o.excuse_note, o.excused_at, ep.id AS excused_by_id, ep.display_name AS excused_by_name
     FROM occurrences o
     LEFT JOIN persons ap ON ap.id = o.assignee_id
     LEFT JOIN completions c ON c.occurrence_id = o.id AND c.voided_at IS NULL
     LEFT JOIN persons cp ON cp.id = c.completer_id
     LEFT JOIN persons rp ON rp.id = c.recorder_id
+    LEFT JOIN persons ep ON ep.id = o.excused_by
     WHERE o.household_id = ${householdId} AND (${choreId}::uuid IS NULL OR o.chore_id = ${choreId}::uuid)
     ORDER BY o.window_start`;
+  const voided = await db`
+    SELECT c.occurrence_id, c.id, c.method, c.tag_id, c.completed_at, c.late, c.voided_at,
+           cp.id AS completer_id, cp.display_name AS completer_name,
+           rp.id AS recorder_id, rp.display_name AS recorder_name,
+           vp.id AS voided_by_id, vp.display_name AS voided_by_name
+    FROM completions c
+    JOIN occurrences o ON o.id = c.occurrence_id
+    JOIN persons cp ON cp.id = c.completer_id
+    JOIN persons rp ON rp.id = c.recorder_id
+    JOIN persons vp ON vp.id = c.voided_by
+    WHERE c.household_id = ${householdId} AND c.voided_at IS NOT NULL
+      AND (${choreId}::uuid IS NULL OR o.chore_id = ${choreId}::uuid)
+    ORDER BY c.completed_at, c.voided_at`;
+  const voidedByOccurrence = new Map<string, VoidedCompletionView[]>();
+  for (const v of voided as any[]) {
+    const list = voidedByOccurrence.get(v.occurrence_id) ?? [];
+    list.push({
+      id: v.id,
+      completer: { id: v.completer_id, displayName: v.completer_name },
+      recorder: { id: v.recorder_id, displayName: v.recorder_name },
+      method: v.method,
+      tagId: v.tag_id,
+      completedAt: v.completed_at,
+      late: v.late,
+      voidedAt: v.voided_at,
+      voidedBy: { id: v.voided_by_id, displayName: v.voided_by_name },
+    });
+    voidedByOccurrence.set(v.occurrence_id, list);
+  }
   return rows.map((r: any) => ({
     choreId: r.chore_id as string,
     id: r.id,
@@ -137,6 +186,14 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
           tagId: r.tag_id,
           completedAt: r.completed_at,
           late: r.late,
+        }
+      : null,
+    voidedCompletions: voidedByOccurrence.get(r.id) ?? [],
+    excuse: r.excused_at
+      ? {
+          note: r.excuse_note,
+          excusedAt: r.excused_at,
+          excusedBy: { id: r.excused_by_id, displayName: r.excused_by_name },
         }
       : null,
   })) as (OccurrenceView & { choreId: string })[];

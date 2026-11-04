@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { api, type Chore, type CompleteResult, type Member } from "../api";
+import { api, ApiError, type Chore, type CompleteResult } from "../api";
 import {
   AssigneeSelect,
   describeSchedule,
@@ -10,16 +10,13 @@ import {
   scheduleFromDraft,
   type ScheduleDraft,
 } from "./schedule-fields";
+import { CompleterPicker, ExcuseForm, useHouseholdPersons, VoidButton } from "./corrections";
 
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
 
 /** The Household's current Persons (for choosing and naming Assignees). */
-function useMembers(householdId: string): Member[] {
-  const members = useQuery({
-    queryKey: ["members", householdId],
-    queryFn: () => api<{ members: Member[] }>(`/households/${householdId}/members`),
-  });
-  return members.data?.members ?? [];
+function useMembers(householdId: string) {
+  return useHouseholdPersons(householdId, true).data?.persons ?? [];
 }
 
 /** The Household's Chores with their current status, next due date and a Complete button. */
@@ -47,12 +44,14 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
   const queryClient = useQueryClient();
   // One key per press of the button, reused if the request is retried.
   const key = useRef<string | null>(null);
+  // Admins may credit someone else ("" = themselves); they are then the Recorder.
+  const [completerId, setCompleterId] = useState("");
   const complete = useMutation({
     mutationFn: () => {
       key.current ??= crypto.randomUUID();
       return api<CompleteResult>(`/households/${householdId}/chores/${chore.id}/complete`, {
         method: "POST",
-        body: JSON.stringify({ idempotencyKey: key.current }),
+        body: JSON.stringify({ idempotencyKey: key.current, ...(completerId ? { completerId } : {}) }),
       });
     },
     retry: 2,
@@ -64,7 +63,7 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
 
   const [editing, setEditing] = useState(false);
   const members = useMembers(householdId);
-  const nameOf = (id: string) => members.find((m) => m.personId === id)?.displayName;
+  const nameOf = (id: string) => members.find((m) => m.id === id)?.displayName;
   const occ = chore.currentOccurrence;
   const hasSlots = chore.schedule.kind === "fixed" && Boolean(chore.schedule.slots?.length);
   // The current Occurrence's Assignee, else (before any Occurrence) the Chore's.
@@ -76,6 +75,7 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
         <span>
           {occ.timeSlot ? `${occ.timeSlot}: ` : ""}
           {STATUS_LABEL[occ.status]}
+          {occ.excuse ? ` · Excused: ${occ.excuse.note}` : ""}
         </span>
       ) : (
         <span>Not due yet</span>
@@ -84,23 +84,77 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
       {occ?.completion && (
         <span>
           {" "}
-          · Completed by {occ.completion.completer.displayName} · {occ.completion.late ? "Late" : "On time"}
+          · Completed by {occ.completion.completer.displayName}
+          {occ.completion.recorder.id !== occ.completion.completer.id
+            ? ` (recorded by ${occ.completion.recorder.displayName})`
+            : ""}
+          {occ.completion.late ? " · Late" : " · On time"}
         </span>
       )}
       {chore.nextDue && <span> · Next due {chore.nextDue.dueDate}</span>}{" "}
+      {occ?.status === "open" && isAdmin && (
+        <CompleterPicker householdId={householdId} value={completerId} onChange={setCompleterId} />
+      )}{" "}
       {occ?.status === "open" && (
         <button type="button" disabled={complete.isPending} onClick={() => complete.mutate()}>
           Complete
         </button>
       )}
       {complete.error && <span role="alert"> Could not complete. Try again.</span>}
+      {isAdmin && occ?.completion && <VoidButton householdId={householdId} completionId={occ.completion.id} />}
+      {isAdmin && (occ?.status === "open" || occ?.status === "missed") && (
+        <ExcuseForm householdId={householdId} occurrenceId={occ.id} />
+      )}
       {isAdmin && !editing && (
         <button type="button" onClick={() => setEditing(true)}>
           Edit
         </button>
       )}
+      {isAdmin && <ChoreAdminActions householdId={householdId} chore={chore} />}
       {editing && <EditChoreForm householdId={householdId} chore={chore} onDone={() => setEditing(false)} />}
     </li>
+  );
+}
+
+/**
+ * Admin-only: Archive (always allowed; keeps history and unlinks the Chore's
+ * Tags) and Delete (only for a Chore with no history; the API answers 409
+ * otherwise).
+ */
+function ChoreAdminActions({ householdId, chore }: { householdId: string; chore: Chore }) {
+  const queryClient = useQueryClient();
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["chores", householdId] }),
+      queryClient.invalidateQueries({ queryKey: ["tags", householdId] }),
+    ]);
+  const archive = useMutation({
+    mutationFn: () => api(`/households/${householdId}/chores/${chore.id}/archive`, { method: "POST" }),
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/households/${householdId}/chores/${chore.id}`, { method: "DELETE" }),
+    onSuccess: refresh,
+  });
+  const busy = archive.isPending || remove.isPending;
+  return (
+    <>
+      {" "}
+      <button type="button" disabled={busy} onClick={() => archive.mutate()}>
+        Archive
+      </button>{" "}
+      <button type="button" disabled={busy} onClick={() => remove.mutate()}>
+        Delete
+      </button>
+      {archive.error && <span role="alert"> Could not archive.</span>}
+      {remove.error && (
+        <span role="alert">
+          {remove.error instanceof ApiError && remove.error.status === 409
+            ? " This chore has history, so it can only be archived."
+            : " Could not delete."}
+        </span>
+      )}
+    </>
   );
 }
 
