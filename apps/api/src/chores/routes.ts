@@ -3,8 +3,10 @@ import type { AppEnv } from "../app";
 import { requireSession } from "../auth/sessions";
 import { requireAdmin, requireMembership } from "../households/membership";
 import { localDateOf } from "../schedule/calendar";
-import { parseSchedule } from "../schedule/engine";
-import { getChore, listChores } from "./views";
+import { parseSchedule, slotAssigneeIds, type Schedule } from "../schedule/engine";
+import { currentMemberIds } from "../households/membership";
+import type { Db } from "../db/client";
+import { getChore, listChores, personRef } from "./views";
 import { completeDueOccurrence } from "../completions/service";
 
 /** /api/households/:householdId/chores */
@@ -68,15 +70,19 @@ export const choreRoutes = new Hono<AppEnv>()
       if (!parsed.ok) return c.json({ error: parsed.error }, 400);
       schedule = parsed.schedule;
     }
+    const setAssignee = body?.assigneeId !== undefined;
+    const invalid = await invalidAssignees(db, householdId, body?.assigneeId, schedule);
+    if (invalid) return c.json({ error: invalid }, 400);
 
     const [row] = await db`
       UPDATE chores SET
         name = COALESCE(${name}, name),
-        schedule = COALESCE(${schedule}::jsonb, schedule)
+        schedule = COALESCE(${schedule}::jsonb, schedule),
+        assignee_id = CASE WHEN ${setAssignee} THEN ${body?.assigneeId ?? null}::uuid ELSE assignee_id END
       WHERE household_id = ${householdId} AND id = ${c.req.param("choreId")}::uuid AND archived_at IS NULL
-      RETURNING id, name, schedule`.catch(() => []);
+      RETURNING id`.catch(() => []);
     if (!row) return c.json({ error: "not_found" }, 404);
-    return c.json({ id: row.id, name: row.name, schedule: row.schedule });
+    return c.json(await choreSummary(db, row.id));
   })
   .post("/", requireAdmin, async (c) => {
     const { db, clock } = c.var.deps;
@@ -88,10 +94,40 @@ export const choreRoutes = new Hono<AppEnv>()
     const now = clock.now();
     const parsed = parseSchedule(body?.schedule, localDateOf(now, timeZone));
     if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    const invalid = await invalidAssignees(db, householdId, body?.assigneeId, parsed.schedule);
+    if (invalid) return c.json({ error: invalid }, 400);
 
     const [row] = await db`
-      INSERT INTO chores (household_id, name, schedule, created_at)
-      VALUES (${householdId}, ${name}, ${parsed.schedule}, ${now})
-      RETURNING id, name, schedule`;
-    return c.json({ id: row.id, name: row.name, schedule: row.schedule }, 201);
+      INSERT INTO chores (household_id, name, schedule, assignee_id, created_at)
+      VALUES (${householdId}, ${name}, ${parsed.schedule}, ${body?.assigneeId ?? null}, ${now})
+      RETURNING id`;
+    return c.json(await choreSummary(db, row.id), 201);
   });
+
+/**
+ * Checks a Chore's Assignee (undefined: unchanged, null: none) and its Time
+ * Slots' Assignees: each must be a Person with a current Membership here.
+ * Returns an error message, or null when valid.
+ */
+async function invalidAssignees(
+  db: Db,
+  householdId: string,
+  choreAssigneeId: unknown,
+  schedule: Schedule | null,
+): Promise<string | null> {
+  if (choreAssigneeId !== undefined && choreAssigneeId !== null && typeof choreAssigneeId !== "string") {
+    return "assigneeId must be a Person id or null";
+  }
+  const ids = [...new Set([...(typeof choreAssigneeId === "string" ? [choreAssigneeId] : []), ...(schedule ? slotAssigneeIds(schedule) : [])])];
+  const members = await currentMemberIds(db, householdId, ids);
+  return ids.every((id) => members.has(id)) ? null : "each Assignee must be a Person in this Household";
+}
+
+/** { id, name, schedule, assignee } as returned by create and edit. */
+async function choreSummary(db: Db, choreId: string) {
+  const [row] = await db`
+    SELECT c.id, c.name, c.schedule, c.assignee_id, p.display_name
+    FROM chores c LEFT JOIN persons p ON p.id = c.assignee_id
+    WHERE c.id = ${choreId}`;
+  return { id: row.id, name: row.name, schedule: row.schedule, assignee: personRef(row.assignee_id, row.display_name) };
+}

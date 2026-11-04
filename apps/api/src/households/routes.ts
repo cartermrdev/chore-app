@@ -24,6 +24,18 @@ export const householdRoutes = new Hono<AppEnv>()
       WHERE id = ${c.var.membership.householdId}
       RETURNING id, name, time_zone`;
     return c.json({ id: row.id, name: row.name, timeZone: row.time_zone });
+  })
+  /** The Household's current Persons (any member may list them, e.g. to choose Assignees). */
+  .get("/members", requireSession, requireMembership, async (c) => {
+    const { db } = c.var.deps;
+    const rows = await db`
+      SELECT p.id, p.display_name, m.role
+      FROM memberships m JOIN persons p ON p.id = m.person_id
+      WHERE m.household_id = ${c.var.membership.householdId} AND m.ended_at IS NULL
+      ORDER BY p.display_name, p.id`;
+    return c.json({
+      members: rows.map((r: any) => ({ personId: r.id, displayName: r.display_name, role: r.role })),
+    });
   });
 
 /** GET /api/me: the signed-in Person and their current Memberships. */

@@ -31,14 +31,22 @@ export type Me = {
 
 export type OccurrenceStatus = "open" | "completed" | "missed" | "skipped";
 
+export type PersonRef = { id: string; displayName: string };
+
 export type Completion = {
   id: string;
-  completer: { id: string; displayName: string };
-  recorder: { id: string; displayName: string };
+  completer: PersonRef;
+  recorder: PersonRef;
+  /** The Occurrence's Assignee (on complete and scan results). */
+  assignee?: PersonRef | null;
+  timeSlot?: string | null;
   method: "manual" | "nfc";
   completedAt: string;
   late: boolean;
 };
+
+/** GET /api/households/:id/members */
+export type Member = { personId: string; displayName: string; role: "admin" | "standard" };
 
 /** ISO weekday: 1 = Monday … 7 = Sunday. */
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -48,18 +56,25 @@ export type FixedRule =
   | { type: "weekdays"; weekdays: Weekday[]; n: number }
   | { type: "monthly"; day: number };
 
+/** A named time of day ("HH:MM") within a Fixed Schedule, each producing its own Occurrence. */
+export type TimeSlot = { name: string; start: string; assigneeId: string | null };
+
 /** Mirrors the backend Schedule engine's definition. */
 export type Schedule =
-  | { kind: "fixed"; startDate: string; rule: FixedRule }
+  | { kind: "fixed"; startDate: string; rule: FixedRule; slots?: TimeSlot[] }
   | { kind: "one_off"; dueDate: string };
 
 export type Chore = {
   id: string;
   name: string;
   schedule: Schedule;
+  /** Copied onto Occurrences when the Schedule has no Time Slots. */
+  assignee: PersonRef | null;
   currentOccurrence: {
     id: string;
     dueDate: string;
+    timeSlot: string | null;
+    assignee: PersonRef | null;
     status: OccurrenceStatus;
     completion: Completion | null;
   } | null;

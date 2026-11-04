@@ -24,6 +24,16 @@ export async function findMembership(db: Db, householdId: string, personId: stri
   return { householdId, personId, role: row.role, timeZone: row.time_zone };
 }
 
+/** Which of the given Person ids have a current Membership in the Household (malformed ids never do). */
+export async function currentMemberIds(db: Db, householdId: string, personIds: string[]): Promise<Set<string>> {
+  if (personIds.length === 0) return new Set();
+  const rows = await db`
+    SELECT person_id::text FROM memberships
+    WHERE household_id = ${householdId}::uuid AND ended_at IS NULL
+      AND person_id::text IN ${db(personIds)}`;
+  return new Set(rows.map((r: any) => r.person_id));
+}
+
 /**
  * For routes under /households/:householdId. Requires requireSession first.
  * Non-members get 404 so a Household reveals nothing to outsiders.

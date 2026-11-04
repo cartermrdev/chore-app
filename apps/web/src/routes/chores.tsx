@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { api, type Chore, type CompleteResult } from "../api";
+import { api, type Chore, type CompleteResult, type Member } from "../api";
 import {
+  AssigneeSelect,
   describeSchedule,
   draftFromSchedule,
   EMPTY_DRAFT,
@@ -11,6 +12,15 @@ import {
 } from "./schedule-fields";
 
 const STATUS_LABEL = { open: "Open", completed: "Completed", missed: "Missed", skipped: "Skipped" } as const;
+
+/** The Household's current Persons (for choosing and naming Assignees). */
+function useMembers(householdId: string): Member[] {
+  const members = useQuery({
+    queryKey: ["members", householdId],
+    queryFn: () => api<{ members: Member[] }>(`/households/${householdId}/members`),
+  });
+  return members.data?.members ?? [];
+}
 
 /** The Household's Chores with their current status, next due date and a Complete button. */
 export function ChoreList({ householdId, isAdmin }: { householdId: string; isAdmin: boolean }) {
@@ -53,16 +63,28 @@ function ChoreRow({ householdId, chore, isAdmin }: { householdId: string; chore:
   });
 
   const [editing, setEditing] = useState(false);
+  const members = useMembers(householdId);
+  const nameOf = (id: string) => members.find((m) => m.personId === id)?.displayName;
   const occ = chore.currentOccurrence;
+  const hasSlots = chore.schedule.kind === "fixed" && Boolean(chore.schedule.slots?.length);
+  // The current Occurrence's Assignee, else (before any Occurrence) the Chore's.
+  const assignee = occ ? occ.assignee : hasSlots ? null : chore.assignee;
   return (
     <li>
-      <strong>{chore.name}</strong> <span>({describeSchedule(chore.schedule)})</span>{" "}
-      {occ ? <span>{STATUS_LABEL[occ.status]}</span> : <span>Not due yet</span>}
+      <strong>{chore.name}</strong> <span>({describeSchedule(chore.schedule, nameOf)})</span>{" "}
+      {occ ? (
+        <span>
+          {occ.timeSlot ? `${occ.timeSlot}: ` : ""}
+          {STATUS_LABEL[occ.status]}
+        </span>
+      ) : (
+        <span>Not due yet</span>
+      )}
+      {assignee && <span> · Assigned to {assignee.displayName}</span>}
       {occ?.completion && (
         <span>
           {" "}
-          · Completed by {occ.completion.completer.displayName}
-          {occ.completion.late ? " (Late)" : ""}
+          · Completed by {occ.completion.completer.displayName} · {occ.completion.late ? "Late" : "On time"}
         </span>
       )}
       {chore.nextDue && <span> · Next due {chore.nextDue.dueDate}</span>}{" "}
@@ -97,8 +119,10 @@ function AddChoreForm({ householdId }: { householdId: string }) {
   return (
     <ChoreForm
       key={formKey}
+      householdId={householdId}
       label="Add chore"
       initialName=""
+      initialAssigneeId=""
       initialSchedule={EMPTY_DRAFT}
       pending={create.isPending}
       error={create.error ? "Could not add the chore." : null}
@@ -124,9 +148,11 @@ function EditChoreForm({ householdId, chore, onDone }: { householdId: string; ch
 
   return (
     <ChoreForm
+      householdId={householdId}
       label="Edit chore"
       submitText="Save"
       initialName={chore.name}
+      initialAssigneeId={chore.assignee?.id ?? ""}
       initialSchedule={draftFromSchedule(chore.schedule)}
       pending={save.isPending}
       error={save.error ? "Could not save the chore." : null}
@@ -136,12 +162,14 @@ function EditChoreForm({ householdId, chore, onDone }: { householdId: string; ch
   );
 }
 
-type ChoreFormValues = { name: string; schedule: ReturnType<typeof scheduleFromDraft> };
+type ChoreFormValues = { name: string; assigneeId: string | null; schedule: ReturnType<typeof scheduleFromDraft> };
 
 function ChoreForm(props: {
+  householdId: string;
   label: string;
   submitText?: string;
   initialName: string;
+  initialAssigneeId: string;
   initialSchedule: ScheduleDraft;
   pending: boolean;
   error: string | null;
@@ -150,7 +178,9 @@ function ChoreForm(props: {
 }) {
   const [name, setName] = useState(props.initialName);
   const [schedule, setSchedule] = useState(props.initialSchedule);
+  const [assigneeId, setAssigneeId] = useState(props.initialAssigneeId);
   const [invalid, setInvalid] = useState<string | null>(null);
+  const members = useMembers(props.householdId);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -159,7 +189,7 @@ function ChoreForm(props: {
       return;
     }
     setInvalid(null);
-    props.onSubmit({ name, schedule: scheduleFromDraft(schedule) });
+    props.onSubmit({ name, assigneeId: assigneeId || null, schedule: scheduleFromDraft(schedule) });
   };
 
   return (
@@ -167,7 +197,13 @@ function ChoreForm(props: {
       <label>
         Chore name <input value={name} onChange={(e) => setName(e.target.value)} required />
       </label>{" "}
-      <ScheduleFields draft={schedule} onChange={setSchedule} />{" "}
+      {/* With Time Slots, each slot has its own Assignee instead. */}
+      {schedule.slots.length === 0 && (
+        <>
+          <AssigneeSelect label="Assignee" value={assigneeId} members={members} onChange={setAssigneeId} />{" "}
+        </>
+      )}
+      <ScheduleFields draft={schedule} members={members} onChange={setSchedule} />{" "}
       <button type="submit" disabled={props.pending}>
         {props.submitText ?? props.label}
       </button>

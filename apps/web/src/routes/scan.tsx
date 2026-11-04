@@ -63,11 +63,17 @@ function OutcomeScreen({ result }: { result: ScanOutcome }) {
       const c = result.completion;
       return (
         <Screen title={result.chore.name} mark="✓">
-          <p>Credited to {c.completer.displayName}</p>
           <p>
-            {c.late ? "Late" : "On time"}
+            Credited to {c.completer.displayName} · {c.late ? "Late" : "On time"}
             <NextDue nextDue={result.nextDue} prefix=" · " />
           </p>
+          {(c.timeSlot || c.assignee) && (
+            <p>
+              {c.timeSlot}
+              {c.timeSlot && c.assignee ? " · " : ""}
+              {c.assignee && `Assigned to ${c.assignee.displayName}`}
+            </p>
+          )}
         </Screen>
       );
     }

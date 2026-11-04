@@ -9,6 +9,8 @@ import type { Schedule } from "../schedule/engine";
 
 export type OccurrenceStatus = "open" | "completed" | "missed" | "skipped";
 
+export type PersonRef = { id: string; displayName: string };
+
 export type CompletionView = {
   id: string;
   completer: { id: string; displayName: string };
@@ -27,6 +29,8 @@ export type OccurrenceView = {
   dueTime: Date;
   windowEnd: Date | null;
   status: OccurrenceStatus;
+  /** Who is expected to complete it, copied from its Time Slot or Chore when created. */
+  assignee: PersonRef | null;
   /** The active (non-voided) Completion, if any. */
   completion: CompletionView | null;
 };
@@ -35,6 +39,8 @@ export type ChoreView = {
   id: string;
   name: string;
   schedule: Schedule;
+  /** The Chore's Assignee, used for Occurrences when the Schedule has no Time Slots. */
+  assignee: PersonRef | null;
   /** The earliest Open Occurrence whose Window has opened, else the latest opened one. */
   currentOccurrence: OccurrenceView | null;
   /** The earliest Open Occurrence, else the next one the Schedule will create. */
@@ -49,9 +55,10 @@ type Scope = { db: Db; membership: CurrentMembership; now: Date };
 export async function listChores({ db, membership, now }: Scope): Promise<ChoreView[]> {
   await materialise(db, { householdId: membership.householdId, timeZone: membership.timeZone, now });
   const chores = await db`
-    SELECT id, name, schedule FROM chores
-    WHERE household_id = ${membership.householdId} AND archived_at IS NULL
-    ORDER BY name, created_at`;
+    SELECT c.id, c.name, c.schedule, c.assignee_id, ap.display_name AS assignee_name
+    FROM chores c LEFT JOIN persons ap ON ap.id = c.assignee_id
+    WHERE c.household_id = ${membership.householdId} AND c.archived_at IS NULL
+    ORDER BY c.name, c.created_at`;
   const occurrences = await loadOccurrences(db, membership.householdId, null);
   return chores.map((c: any) =>
     toChoreView(c, occurrences.filter((o) => o.choreId === c.id), membership.timeZone, now),
@@ -61,8 +68,9 @@ export async function listChores({ db, membership, now }: Scope): Promise<ChoreV
 /** One Chore in the Household with all its Occurrences, or null. */
 export async function getChore({ db, membership, now }: Scope, choreId: string): Promise<ChoreDetailView | null> {
   const [chore] = await db`
-    SELECT id, name, schedule FROM chores
-    WHERE household_id = ${membership.householdId} AND id = ${choreId}::uuid`.catch(() => []);
+    SELECT c.id, c.name, c.schedule, c.assignee_id, ap.display_name AS assignee_name
+    FROM chores c LEFT JOIN persons ap ON ap.id = c.assignee_id
+    WHERE c.household_id = ${membership.householdId} AND c.id = ${choreId}::uuid`.catch(() => []);
   if (!chore) return null;
   await materialise(db, { householdId: membership.householdId, timeZone: membership.timeZone, now, choreId });
   const occurrences = await loadOccurrences(db, membership.householdId, choreId);
@@ -82,17 +90,29 @@ function toChoreView(chore: any, occurrences: (OccurrenceView & { choreId: strin
     occurrences.find((o) => o.status === "open") ?? null,
     occurrences.at(-1) ?? null,
   );
-  return { id: chore.id, name: chore.name, schedule: chore.schedule, currentOccurrence, nextDue };
+  return {
+    id: chore.id,
+    name: chore.name,
+    schedule: chore.schedule,
+    assignee: personRef(chore.assignee_id, chore.assignee_name),
+    currentOccurrence,
+    nextDue,
+  };
+}
+
+export function personRef(id: string | null, displayName: string | null): PersonRef | null {
+  return id ? { id, displayName: displayName ?? "" } : null;
 }
 
 async function loadOccurrences(db: Db, householdId: string, choreId: string | null) {
   const rows = await db`
     SELECT o.id, o.chore_id, o.due_date::text AS due_date, o.time_slot, o.window_start, o.due_time,
-           o.window_end, o.status,
+           o.window_end, o.status, o.assignee_id, ap.display_name AS assignee_name,
            c.id AS completion_id, c.method, c.tag_id, c.completed_at, c.late,
            cp.id AS completer_id, cp.display_name AS completer_name,
            rp.id AS recorder_id, rp.display_name AS recorder_name
     FROM occurrences o
+    LEFT JOIN persons ap ON ap.id = o.assignee_id
     LEFT JOIN completions c ON c.occurrence_id = o.id AND c.voided_at IS NULL
     LEFT JOIN persons cp ON cp.id = c.completer_id
     LEFT JOIN persons rp ON rp.id = c.recorder_id
@@ -107,6 +127,7 @@ async function loadOccurrences(db: Db, householdId: string, choreId: string | nu
     dueTime: r.due_time,
     windowEnd: r.window_end,
     status: r.status,
+    assignee: personRef(r.assignee_id, r.assignee_name),
     completion: r.completion_id
       ? {
           id: r.completion_id,
