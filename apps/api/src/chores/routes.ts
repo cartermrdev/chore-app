@@ -48,6 +48,36 @@ export const choreRoutes = new Hono<AppEnv>()
         return c.json({ error: "forbidden" }, 403);
     }
   })
+  /**
+   * Edit a Chore's name and/or Schedule. The new Schedule replaces the old one
+   * and applies only to Occurrences not yet created (see the materialiser).
+   */
+  .patch("/:choreId", requireAdmin, async (c) => {
+    const { db, clock } = c.var.deps;
+    const { householdId, timeZone } = c.var.membership;
+    const body = await c.req.json().catch(() => ({}));
+
+    let name: string | null = null;
+    if (body?.name !== undefined) {
+      name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) return c.json({ error: "name is required" }, 400);
+    }
+    let schedule = null;
+    if (body?.schedule !== undefined) {
+      const parsed = parseSchedule(body.schedule, localDateOf(clock.now(), timeZone));
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      schedule = parsed.schedule;
+    }
+
+    const [row] = await db`
+      UPDATE chores SET
+        name = COALESCE(${name}, name),
+        schedule = COALESCE(${schedule}::jsonb, schedule)
+      WHERE household_id = ${householdId} AND id = ${c.req.param("choreId")}::uuid AND archived_at IS NULL
+      RETURNING id, name, schedule`.catch(() => []);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    return c.json({ id: row.id, name: row.name, schedule: row.schedule });
+  })
   .post("/", requireAdmin, async (c) => {
     const { db, clock } = c.var.deps;
     const { householdId, timeZone } = c.var.membership;

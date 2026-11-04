@@ -173,12 +173,14 @@ async function nextDueJson(tx: Db, chore: { id: string; schedule: any }, timeZon
   const [firstOpen] = await tx`
     SELECT due_date::text AS due_date, due_time FROM occurrences
     WHERE chore_id = ${chore.id} AND status = 'open' ORDER BY window_start LIMIT 1`;
-  const [last] = await tx`SELECT max(window_start) AS ws FROM occurrences WHERE chore_id = ${chore.id}`;
+  const [last] = await tx`
+    SELECT window_start, window_end FROM occurrences
+    WHERE chore_id = ${chore.id} ORDER BY window_start DESC LIMIT 1`;
   const next = deriveNextDue(
     chore.schedule,
     timeZone,
     firstOpen ? { dueDate: firstOpen.due_date, dueTime: firstOpen.due_time } : null,
-    last?.ws ?? null,
+    last ? { windowStart: last.window_start, windowEnd: last.window_end } : null,
   );
   return next ? { dueDate: next.dueDate, dueTime: next.dueTime.toISOString() } : null;
 }
