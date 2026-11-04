@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api";
+import { api, ApiError, type Me } from "../api";
 import { acceptInvite, redeemMagicLink, requestMagicLink, signInWithPasskey } from "../auth";
 
 /** After signing in, load `next` afresh so every query (and a pending Scan) starts with the new session. */
@@ -74,8 +74,14 @@ export function InvitePage({ token }: { token: string }) {
     retry: false,
   });
   const accept = useMutation({ mutationFn: () => acceptInvite(token), onSuccess: () => continueTo("/") });
+  // Already signed in? Join with this login instead of creating a new Person (ADR 0002).
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), retry: false });
+  const join = useMutation({
+    mutationFn: () => api(`/invites/${encodeURIComponent(token)}/join`, { method: "POST" }),
+    onSuccess: () => continueTo("/"),
+  });
 
-  if (info.isPending) return <p>Loading…</p>;
+  if (info.isPending || me.isPending) return <p>Loading…</p>;
   if (info.error instanceof ApiError && info.error.status === 404) {
     return (
       <section>
@@ -85,6 +91,28 @@ export function InvitePage({ token }: { token: string }) {
     );
   }
   if (info.error) return <p role="alert">Something went wrong.</p>;
+
+  if (me.data && info.data.kind === "new") {
+    const alreadyMember = join.error instanceof ApiError && join.error.status === 409;
+    return (
+      <section>
+        <h1>Join {info.data.household.name}</h1>
+        <p>You're signed in as {me.data.person.displayName}. Join with this login to switch between your Households.</p>
+        <button type="button" disabled={join.isPending} onClick={() => join.mutate()}>
+          Join as {me.data.person.displayName}
+        </button>
+        {alreadyMember && <p role="alert">You're already in this Household.</p>}
+        {join.isError && !alreadyMember && <p role="alert">That didn't work. Try again.</p>}
+        <p>
+          Not {me.data.person.displayName}?{" "}
+          <button type="button" disabled={accept.isPending} onClick={() => accept.mutate()}>
+            Set up a passkey for {info.data.displayName}
+          </button>
+        </p>
+        {accept.isError && <p role="alert">That didn't work. Try again.</p>}
+      </section>
+    );
+  }
 
   return (
     <section>

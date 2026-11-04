@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../app";
 import { requireSession, startSession } from "../auth/sessions";
 import { requireAdmin, requireMembership } from "../households/membership";
-import { acceptInvite, beginInvite, createInvite, describeInvite } from "./service";
+import { acceptInvite, beginInvite, createInvite, describeInvite, joinWithInvite } from "./service";
 
 /**
  * Admin: /api/households/:householdId/invites
@@ -38,6 +38,8 @@ export const householdInviteRoutes = new Hono<AppEnv>()
  * GET                                   -> 200 { kind, displayName, household: { name } }
  * POST /options                         -> 200 { challengeId, options } (WebAuthn creation options)
  * POST /accept { challengeId, response } -> 200 { personId } and a session cookie
+ * POST /join (session)                  -> 200 { personId, householdId }: the signed-in Person joins
+ *   the Household with their existing login (kind "new" only). 409 already_a_member, 401 without a session.
  * An unknown, used or expired Invite is 404 everywhere; a bad passkey response is 400.
  */
 export const inviteRoutes = new Hono<AppEnv>()
@@ -60,4 +62,11 @@ export const inviteRoutes = new Hono<AppEnv>()
     }
     await startSession(c, result.personId);
     return c.json({ personId: result.personId });
+  })
+  .post("/:token/join", requireSession, async (c) => {
+    const result = await joinWithInvite(c.var.deps, c.req.param("token"), c.var.personId);
+    if (!result.ok) {
+      return result.error === "invite_invalid" ? c.json({ error: "not_found" }, 404) : c.json({ error: result.error }, 409);
+    }
+    return c.json({ personId: result.personId, householdId: result.householdId });
   });

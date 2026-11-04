@@ -179,3 +179,49 @@ export async function acceptInvite(
 }
 
 class InviteGone extends Error {}
+
+export type JoinResult =
+  | { ok: true; personId: string; householdId: string }
+  | { ok: false; error: "invite_invalid" | "already_a_member" };
+
+/**
+ * A signed-in Person uses a `new` Invite to join its Household with their
+ * existing login (ADR 0002: one Person, many Households). No passkey ceremony:
+ * the session already proves who they are. The Invite's Role applies; its
+ * display name is ignored (the Person keeps theirs). Recovery Invites can't be
+ * joined. A Person who already has a current Membership there gets
+ * already_a_member, and the Invite stays unused.
+ */
+export async function joinWithInvite(
+  deps: Pick<Deps, "db" | "clock">,
+  token: string,
+  personId: string,
+): Promise<JoinResult> {
+  const invite = await findOpenInvite(deps, token);
+  if (!invite || invite.kind !== "new") return { ok: false, error: "invite_invalid" };
+  const now = deps.clock.now();
+  try {
+    return await deps.db.begin(async (tx) => {
+      const member = await tx`
+        SELECT 1 FROM memberships
+        WHERE household_id = ${invite.householdId} AND person_id = ${personId} AND ended_at IS NULL`;
+      if (member.length > 0) return { ok: false as const, error: "already_a_member" as const };
+      const used = await tx`
+        UPDATE invites SET accepted_at = ${now}, person_id = ${personId}
+        WHERE id = ${invite.id} AND accepted_at IS NULL AND expires_at > ${now}
+        RETURNING id`;
+      if (used.length === 0) throw new InviteGone();
+      // The unique index on current Memberships stops a concurrent double join.
+      await tx`
+        INSERT INTO memberships (household_id, person_id, role, created_at)
+        VALUES (${invite.householdId}, ${personId}, ${invite.role}, ${now})`;
+      return { ok: true as const, personId, householdId: invite.householdId };
+    });
+  } catch (e) {
+    if (e instanceof InviteGone) return { ok: false, error: "invite_invalid" };
+    if ((e as { errno?: string })?.errno === "23505" || String(e).includes("memberships_current_unique")) {
+      return { ok: false, error: "already_a_member" };
+    }
+    throw e;
+  }
+}
