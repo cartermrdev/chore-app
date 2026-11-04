@@ -5,6 +5,7 @@ import { api, ApiError, type Me } from "../api";
 import { signOut } from "../auth";
 import { ChoreList } from "./chores";
 import { InviteForm } from "./invites";
+import { HouseholdSwitcher, MembershipManager, useCurrentHousehold } from "./memberships";
 import { TagManager } from "./tags";
 
 export function HomePage() {
@@ -37,16 +38,27 @@ export function HomePage() {
         </button>
       </p>
       <EmailSetting email={me.data.person.email} />
-      {me.data.memberships.map((m) => (
-        <article key={m.household.id}>
-          <h1>{m.household.name}</h1>
-          <p>Time zone: {m.household.timeZone}</p>
-          {m.role === "admin" && <HouseholdSettings householdId={m.household.id} timeZone={m.household.timeZone} />}
-          <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
-          {m.role === "admin" && <TagManager householdId={m.household.id} />}
-          {m.role === "admin" && <InviteForm householdId={m.household.id} />}
-        </article>
-      ))}
+      <Households me={me.data} />
+    </>
+  );
+}
+
+/** One Household at a time; a Person with several switches between them. */
+function Households({ me }: { me: Me }) {
+  const { current: m, choose } = useCurrentHousehold(me.memberships);
+  if (!m) return <p>You aren't in any Household.</p>;
+  return (
+    <>
+      <HouseholdSwitcher memberships={me.memberships} currentId={m.household.id} onChoose={choose} />
+      <article key={m.household.id}>
+        <h1>{m.household.name}</h1>
+        <p>Time zone: {m.household.timeZone}</p>
+        {m.role === "admin" && <HouseholdSettings householdId={m.household.id} timeZone={m.household.timeZone} />}
+        <ChoreList householdId={m.household.id} isAdmin={m.role === "admin"} />
+        {m.role === "admin" && <TagManager householdId={m.household.id} />}
+        {m.role === "admin" && <MembershipManager householdId={m.household.id} myId={me.person.id} />}
+        {m.role === "admin" && <InviteForm householdId={m.household.id} />}
+      </article>
     </>
   );
 }
