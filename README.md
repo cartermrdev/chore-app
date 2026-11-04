@@ -44,12 +44,15 @@ apps/api            Bun + Hono + PostgreSQL backend
                       + ceremonies), magic links, Mailer; routes under /api/auth
   src/invites/        Invites (new Person / recovery): Admin creation, public accept
   src/households/     seed, GET/PATCH /api/me
-  src/households/membership.ts  requireMembership / requireAdmin for /households/:householdId routes
+  src/households/access.ts      current Membership lookup; requireMembership / requireAdmin for /households/:householdId routes
+  src/households/membership-changes.ts  changing Roles and ending Memberships (at-least-one-Admin invariant)
   src/schedule/       Schedule engine (pure, no I/O), calendar maths, table-driven tests
   src/occurrences/    Occurrence materialiser (lazy, idempotent; marks Missed)
-  src/chores/         Chore routes, read model (current Occurrence, next due), Archive and delete
+  src/chores/         Chore routes, read model (current Occurrence, next due), create/edit (editing.ts),
+                      Archive and delete (lifecycle.ts)
   src/completions/    Completion service: the single path that creates a Completion;
-                      corrections.ts: Undo, Void and Excuse (/api/completions, /api/occurrences)
+                      corrections.ts: Undo, Void and Excuse (/api/completions, /api/occurrences);
+                      outcome-status.ts: the one outcome -> HTTP status table for completion and scan routes
   src/tags/           Tag service and Admin routes (random ids, link/re-point, claim, delete)
   src/pauses/         Chore and Household Pauses (kept as history)
   src/history/        History views: Household-wide and per-Person (/households/:id/history)
@@ -57,7 +60,7 @@ apps/api            Bun + Hono + PostgreSQL backend
   src/testing/        test-only /api/test/* endpoints
   scripts/            seed and migrate CLIs
   test/               API test harness and API tests (*.test.ts)
-apps/web            React + TanStack Router + TanStack Query frontend (Vite)
+apps/web            React + TanStack Router + TanStack Query frontend (Vite); test/ holds pure unit tests
 e2e/                Playwright tests (*.e2e.ts) and fixtures
 scripts/            dev and e2e runners
 ```
