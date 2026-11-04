@@ -42,12 +42,24 @@ describe("Scan", () => {
         late: false,
       }),
       nextDue: { dueDate: "2026-03-02", timeSlot: null, dueTime: "2026-03-03T00:00:00.000Z" },
+      undoRemainingMs: 5 * 60_000,
     });
     const detail = await h.detail();
     expect(detail.occurrences[0]).toMatchObject({
       status: "completed",
       completion: { method: "nfc", tagId: h.tag.id, completer: { displayName: "Sam" } },
     });
+  });
+
+  test("the confirmation says how long Undo remains by the server's clock, also when a retry replays it", async () => {
+    t.clock.set("2026-03-01T09:00:00Z");
+    const h = await household();
+    await h.scan(h.standard, "u1");
+
+    t.clock.set("2026-03-01T09:02:00Z");
+    expect(await (await h.scan(h.standard, "u1")).json()).toMatchObject({ outcome: "completed", undoRemainingMs: 3 * 60_000 });
+    t.clock.set("2026-03-01T09:06:00Z");
+    expect(await (await h.scan(h.standard, "u1")).json()).toMatchObject({ outcome: "completed", undoRemainingMs: 0 });
   });
 
   test("scanning again once it's done says who completed it and when it's next due, and records nothing", async () => {
@@ -127,7 +139,9 @@ describe("Scan", () => {
     t.clock.set("2026-03-01T09:00:10Z");
     const later = await (await h.scan(h.standard, "retry-key")).json();
 
-    for (const b of [...bodies, later]) expect(b).toEqual(bodies[0]);
+    for (const b of bodies) expect(b).toEqual(bodies[0]);
+    // The same result, except the Undo time left, which is counted at each response.
+    expect(later).toEqual({ ...bodies[0], undoRemainingMs: bodies[0].undoRemainingMs - 10_000 });
     expect(bodies[0].outcome).toBe("completed");
   });
 

@@ -2,21 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type HouseholdPerson } from "../api";
 
-/** Mirrors UNDO_WINDOW_MS in apps/api/src/completions/corrections.ts. The backend enforces it. */
-export const UNDO_WINDOW_MS = 5 * 60_000;
-
 /**
- * Undo for the Completer's own Completion. Shown until 5 minutes after
- * `completedAt`, then hidden. Calls `onUndone` once the backend confirms.
+ * Undo for the Completer's own Completion. Shown for `remainingMs` (the Undo
+ * time left, as the backend counted it when it answered) from when it first
+ * renders, then hidden, so a wrong phone clock can't hide or keep it. Calls
+ * `onUndone` once the backend confirms; the backend enforces the window.
  */
-export function UndoButton({ completionId, completedAt, onUndone }: { completionId: string; completedAt: string; onUndone: () => void }) {
-  const deadline = new Date(completedAt).getTime() + UNDO_WINDOW_MS;
-  const [expired, setExpired] = useState(() => Date.now() >= deadline);
+export function UndoButton({ completionId, remainingMs, onUndone }: { completionId: string; remainingMs: number; onUndone: () => void }) {
+  const [expired, setExpired] = useState(() => remainingMs <= 0);
   useEffect(() => {
     if (expired) return;
-    const timer = setTimeout(() => setExpired(true), Math.max(0, deadline - Date.now()));
+    // A relative timer from the server's figure: only elapsed time matters, never the phone's date.
+    const timer = setTimeout(() => setExpired(true), remainingMs);
     return () => clearTimeout(timer);
-  }, [deadline, expired]);
+    // Count from first render only; a re-render must not restart the countdown.
+  }, [expired]);
 
   const undo = useMutation({
     mutationFn: () => api(`/completions/${completionId}/undo`, { method: "POST" }),

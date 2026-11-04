@@ -2,15 +2,20 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Navigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Chore, type ScanOutcome, type Tag } from "../api";
+import { retryBudget, type RetryBudget } from "../scan-retry";
 import { UndoButton } from "./corrections";
-
-/** Automatic retries after the first attempt: 1 s, 3 s, 6 s (about 10 s), then a Retry button. */
-const RETRY_DELAYS_MS = [1000, 3000, 6000];
-const ATTEMPT_TIMEOUT_MS = 5000;
 
 /** Network failures, timeouts and 5xx are worth retrying; a definite answer (4xx) is not. */
 function isTransient(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500;
+}
+
+/** react-query retry options for a scan request, within `budget` (about 10 s from the first attempt). */
+function retryOptions(budget: RetryBudget) {
+  return {
+    retry: (failures: number, error: unknown) => budget.shouldRetry(failures, isTransient(error)),
+    retryDelay: (failures: number) => budget.delayMs(failures),
+  };
 }
 
 /**
@@ -22,6 +27,7 @@ function isTransient(error: unknown): boolean {
  */
 export function ScanPage({ tagId }: { tagId: string }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [budget] = useState(() => retryBudget());
   /** The answer to an explicit "Complete early" request, once confirmed by the backend. */
   const [early, setEarly] = useState<ScanOutcome | null>(null);
   const scan = useMutation({
@@ -29,10 +35,9 @@ export function ScanPage({ tagId }: { tagId: string }) {
       api<ScanOutcome>(`/scan/${encodeURIComponent(tagId)}`, {
         method: "POST",
         body: JSON.stringify({ idempotencyKey }),
-        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(budget.attemptTimeoutMs()),
       }),
-    retry: (failures, error) => failures < RETRY_DELAYS_MS.length && isTransient(error),
-    retryDelay: (failures) => RETRY_DELAYS_MS[failures] ?? RETRY_DELAYS_MS.at(-1)!,
+    ...retryOptions(budget),
   });
 
   // Exactly one automatic scan per page load (StrictMode runs effects twice in dev).
@@ -48,13 +53,19 @@ export function ScanPage({ tagId }: { tagId: string }) {
   if (scan.isError) {
     const err = scan.error;
     // Logged out (or the session expired): sign in, then come straight back here to scan again
-    // automatically. Nothing was recorded, so the Person doesn't need to tap the Tag again.
+    // automatically. Nothing was recorded, so the Person doesn't need to scan the Tag again.
     if (err instanceof ApiError && err.status === 401) return <Navigate to="/sign-in" search={{ next: `/nfc/${tagId}` }} replace />;
     if (err instanceof ApiError && err.status === 404) return <Screen title="This tag isn't recognised" />;
     return (
       <Screen title="Couldn't record the scan">
         <p role="alert">We couldn't reach the server. Nothing has been recorded yet.</p>
-        <button type="button" onClick={() => scan.mutate()}>
+        <button
+          type="button"
+          onClick={() => {
+            budget.reset();
+            scan.mutate();
+          }}
+        >
           Retry
         </button>
       </Screen>
@@ -97,7 +108,8 @@ function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
         </Screen>
       );
     case "paused":
-      // "Complete anyway" is an Early Completion of the next Occurrence; nothing was recorded by the scan.
+      // "Complete anyway" is an Early Completion of `nextDue` (under an indefinite Pause, the next Occurrence
+      // ignoring the Pause); nothing was recorded by the scan.
       return (
         <Screen
           title={`${result.chore.name} is paused${result.until ? ` until ${formatDate(result.until)}` : ""}`}
@@ -130,8 +142,8 @@ function OutcomeScreen({ result, tagId, onEarly }: OutcomeProps) {
       );
     case "not_a_member":
       return (
-        <Screen title="Not a member">
-          <p>You aren't a member of the household this tag belongs to.</p>
+        <Screen title="You're not part of this household">
+          <p>This tag belongs to a household you don't belong to.</p>
         </Screen>
       );
   }
@@ -156,15 +168,16 @@ function CompleteEarly({
   onDone: (result: ScanOutcome) => void;
 }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [budget] = useState(() => retryBudget());
   const early = useMutation({
     mutationFn: () =>
       api<ScanOutcome>(`/scan/${encodeURIComponent(tagId)}/complete-early`, {
         method: "POST",
         body: JSON.stringify({ idempotencyKey, dueDate: next.dueDate, timeSlot: next.timeSlot }),
-        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(budget.attemptTimeoutMs()),
       }),
-    retry: (failures, error) => failures < RETRY_DELAYS_MS.length && isTransient(error),
-    retryDelay: (failures) => RETRY_DELAYS_MS[failures] ?? RETRY_DELAYS_MS.at(-1)!,
+    ...retryOptions(budget),
+    onMutate: () => budget.reset(),
     onSuccess: onDone,
   });
   return (
@@ -177,8 +190,12 @@ function CompleteEarly({
   );
 }
 
-/** The confirmation, with Undo for the Completer for 5 minutes. */
-function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "completed" | "already_completed" }> }) {
+/**
+ * The confirmation: "Credited to X · On time/Late · Next due …" (an Early
+ * Completion adds a note, never replacing On time/Late), with Undo for the
+ * Completer while the backend says the Undo window is open.
+ */
+function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "completed" }> }) {
   const [undone, setUndone] = useState(false);
   const c = result.completion;
   if (undone) {
@@ -191,9 +208,10 @@ function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "
   return (
     <Screen title={result.chore.name} mark="✓">
       <p>
-        Credited to {c.completer.displayName} · {c.early ? "Completed early" : c.late ? "Late" : "On time"}
-        <NextDue nextDue={result.nextDue} prefix=" · " />
+        Credited to {c.completer.displayName} · {c.late ? "Late" : "On time"} ·{" "}
+        {result.nextDue ? <NextDue nextDue={result.nextDue} /> : "Not due again yet"}
       </p>
+      {c.early && <p>Completed early, before it was due.</p>}
       {(c.timeSlot || c.assignee) && (
         <p>
           {c.timeSlot}
@@ -201,7 +219,7 @@ function CompletedScreen({ result }: { result: Extract<ScanOutcome, { outcome: "
           {c.assignee && `Assigned to ${c.assignee.displayName}`}
         </p>
       )}
-      <UndoButton completionId={c.id} completedAt={c.completedAt} onUndone={() => setUndone(true)} />
+      <UndoButton completionId={c.id} remainingMs={result.undoRemainingMs} onUndone={() => setUndone(true)} />
     </Screen>
   );
 }
@@ -339,11 +357,11 @@ function Screen({ title, mark, children }: { title: string; mark?: string; child
   );
 }
 
-function NextDue({ nextDue, prefix = "" }: { nextDue: Chore["nextDue"]; prefix?: string }) {
+function NextDue({ nextDue }: { nextDue: Chore["nextDue"] }) {
   if (!nextDue) return null;
   return (
     <span>
-      {prefix}Next due {formatDate(nextDue.dueDate)}
+      Next due {formatDate(nextDue.dueDate)}
     </span>
   );
 }

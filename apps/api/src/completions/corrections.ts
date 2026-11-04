@@ -21,6 +21,14 @@ import { findMembership } from "../households/membership";
 /** How long the Completer can Undo their own Completion. */
 export const UNDO_WINDOW_MS = 5 * 60_000;
 
+/**
+ * How much of the Undo window is left at `now` (0 once it has passed). Sent
+ * to the app so it hides Undo by the server's clock, not the phone's.
+ */
+export function undoRemainingMs(completedAt: Date | string, now: Date): number {
+  return Math.max(0, new Date(completedAt).getTime() + UNDO_WINDOW_MS - now.getTime());
+}
+
 export const EXCUSE_NOTE_MAX = 500;
 
 type Deps = { db: Db; clock: Clock };

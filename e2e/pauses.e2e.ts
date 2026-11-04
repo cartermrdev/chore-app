@@ -31,7 +31,8 @@ test("a Scan of a paused Chore shows 'paused until', and Complete anyway records
 
   await page.getByRole("button", { name: "Complete anyway" }).click();
 
-  await expect(page.getByText(/Credited to Robin · Completed early/)).toBeVisible();
+  await expect(page.getByText(/Credited to Robin · On time · Next due/)).toBeVisible();
+  await expect(page.getByText(/Completed early/)).toBeVisible();
   expect((await occurrences()).at(-1)).toMatchObject({
     dueDate: londonDate(3),
     status: "completed",

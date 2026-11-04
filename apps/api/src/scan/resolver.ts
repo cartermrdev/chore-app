@@ -25,6 +25,7 @@ import {
   type CompletionSummary,
   type NextDueJson,
 } from "../completions/service";
+import { undoRemainingMs } from "../completions/corrections";
 import { findMembership } from "../households/membership";
 import { findTag, isWellFormedTagId } from "../tags/service";
 import { pausedUntil } from "../pauses/service";
@@ -40,7 +41,8 @@ export type ScanRequest = {
 export type ChoreRef = { id: string; name: string };
 
 export type ScanOutcome =
-  | { outcome: "completed"; chore: ChoreRef; completion: CompletionSummary; nextDue: NextDueJson }
+  /** `undoRemainingMs`: how long the Completer can still Undo, by the server's clock at response time. */
+  | { outcome: "completed"; chore: ChoreRef; completion: CompletionSummary; nextDue: NextDueJson; undoRemainingMs: number }
   | {
       outcome: "already_completed";
       chore: ChoreRef;
@@ -141,7 +143,14 @@ async function resolveTag(
   const earlyCompletionOffered = "nextDue" in result && result.nextDue !== null;
   switch (result.outcome) {
     case "completed":
-      return { outcome: "completed", chore, completion: result.completion, nextDue: result.nextDue };
+      return {
+        outcome: "completed",
+        chore,
+        completion: result.completion,
+        nextDue: result.nextDue,
+        // Computed per response, not stored with the result, so a replayed retry counts down correctly.
+        undoRemainingMs: undoRemainingMs(result.completion.completedAt, deps.clock.now()),
+      };
     case "already_completed":
       return { outcome: "already_completed", chore, completion: result.completion, nextDue: result.nextDue, earlyCompletionOffered };
     case "nothing_due":

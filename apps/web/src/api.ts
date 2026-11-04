@@ -131,7 +131,8 @@ export type ChoreRef = { id: string; name: string };
 
 /** POST /api/scan/:tagId. Mirrors ScanOutcome in apps/api/src/scan/resolver.ts. */
 export type ScanOutcome =
-  | { outcome: "completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"] }
+  /** `undoRemainingMs`: Undo time left when the backend answered (by its clock, not the phone's). */
+  | { outcome: "completed"; chore: ChoreRef; completion: Completion; nextDue: Chore["nextDue"]; undoRemainingMs: number }
   | {
       outcome: "already_completed";
       chore: ChoreRef;
