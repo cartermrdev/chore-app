@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Clock } from "./clock";
-import { assertValidConfig, type Config } from "./config";
+import { assertValidConfig, publicOrigin, type Config } from "./config";
 import type { Db } from "./db/client";
 import { testRoutes } from "./testing/routes";
 import { meRoutes } from "./households/routes";
@@ -8,13 +8,24 @@ import type { CurrentMembership } from "./households/membership";
 import { choreRoutes } from "./chores/routes";
 import { tagRoutes } from "./tags/routes";
 import { scanRoutes } from "./scan/routes";
+import { consoleMailer, type Mailer } from "./auth/mailer";
+import { createWebAuthn, type WebAuthn } from "./auth/webauthn";
+import { authRoutes } from "./auth/routes";
+import { householdInviteRoutes, inviteRoutes } from "./invites/routes";
 
 /** Everything the app needs from the outside world. Tests inject their own. */
 export type Deps = {
   db: Db;
   clock: Clock;
   config: Config;
+  /** Passkey ceremonies. Tests inject a stub. */
+  webauthn: WebAuthn;
+  /** Outgoing email (magic links). Tests inject an outbox. */
+  mailer: Mailer;
 };
+
+/** What createApp needs; the WebAuthn adapter and Mailer default to the real/console ones. */
+export type AppInput = Omit<Deps, "webauthn" | "mailer"> & Partial<Pick<Deps, "webauthn" | "mailer">>;
 
 export type AppEnv = {
   Variables: {
@@ -26,8 +37,13 @@ export type AppEnv = {
   };
 };
 
-export function createApp(deps: Deps) {
-  assertValidConfig(deps.config);
+export function createApp(input: AppInput) {
+  assertValidConfig(input.config);
+  const deps: Deps = {
+    ...input,
+    webauthn: input.webauthn ?? createWebAuthn({ origin: publicOrigin(input.config) }),
+    mailer: input.mailer ?? consoleMailer,
+  };
 
   const app = new Hono<AppEnv>();
   app.use(async (c, next) => {
@@ -41,6 +57,9 @@ export function createApp(deps: Deps) {
   api.route("/households/:householdId/chores", choreRoutes);
   api.route("/households/:householdId/tags", tagRoutes);
   api.route("/scan", scanRoutes);
+  api.route("/auth", authRoutes);
+  api.route("/invites", inviteRoutes);
+  api.route("/households/:householdId/invites", householdInviteRoutes);
   if (deps.config.testAuth) api.route("/test", testRoutes);
 
   app.route("/api", api);

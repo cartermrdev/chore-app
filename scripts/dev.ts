@@ -1,7 +1,8 @@
 // Local development: bun run dev
 // Starts Postgres (shared docker compose container), the backend and the
 // frontend. Override ports with API_PORT / WEB_PORT and the database with
-// DATABASE_URL. Test-only sign-in is enabled in dev (ENABLE_TEST_AUTH=0 to disable).
+// DATABASE_URL. Sign in with passkeys: `bun run seed` prints an Invite link for the
+// first Admin (test-only sign-in exists only under APP_ENV=test).
 import { join } from "node:path";
 import { start, stop } from "./procs";
 
@@ -14,7 +15,7 @@ if (up.exitCode !== 0) process.exit(up.exitCode ?? 1);
 
 const api = start("api", ["bun", "--watch", "apps/api/src/server.ts"], {
   cwd: root,
-  env: { PORT: apiPort, APP_ENV: "development", ENABLE_TEST_AUTH: process.env.ENABLE_TEST_AUTH ?? "1" },
+  env: { PORT: apiPort, APP_ENV: "development", PUBLIC_ORIGIN: `http://localhost:${webPort}` },
 });
 const web = start("web", ["bun", "x", "vite"], {
   cwd: join(root, "apps/web"),

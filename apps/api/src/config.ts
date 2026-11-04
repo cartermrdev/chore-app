@@ -2,15 +2,27 @@ export type AppEnv = "development" | "test" | "production";
 
 export type Config = {
   env: AppEnv;
-  /** Enables POST /api/test/sign-in. Never allowed in production. */
+  /** Enables the test-only /api/test/* endpoints. Allowed only when env is "test". */
   testAuth: boolean;
+  /**
+   * The origin the app is served from (the owned domain in production), used
+   * as the passkey Relying Party and in emailed links. Defaults to
+   * http://localhost:5173 (the vite dev server).
+   */
+  publicOrigin?: string;
 };
+
+export const DEFAULT_PUBLIC_ORIGIN = "http://localhost:5173";
+
+export function publicOrigin(config: Config): string {
+  return config.publicOrigin ?? DEFAULT_PUBLIC_ORIGIN;
+}
 
 export class ConfigError extends Error {}
 
 export function assertValidConfig(config: Config): Config {
-  if (config.env === "production" && config.testAuth) {
-    throw new ConfigError("Test-only sign-in cannot be enabled in production");
+  if (config.testAuth && config.env !== "test") {
+    throw new ConfigError("Test-only sign-in can only be enabled when APP_ENV=test");
   }
   return config;
 }
@@ -23,6 +35,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return assertValidConfig({
     env: appEnv,
     testAuth: env.ENABLE_TEST_AUTH === "1",
+    publicOrigin: env.PUBLIC_ORIGIN,
   });
 }
 

@@ -1,18 +1,17 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { durationMs } from "../clock";
 import type { AppEnv } from "../app";
+import { hashToken, newToken } from "./tokens";
 
 export const SESSION_COOKIE = "sid";
 export const SESSION_LIFETIME = { days: 90 };
 
-function hashToken(token: string): string {
-  return new Bun.CryptoHasher("sha256").update(token).digest("hex");
-}
-
-function newToken(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return Buffer.from(bytes).toString("base64url");
+/** Ends the current session (if any) and clears the cookie. */
+export async function endSession(c: Context<AppEnv>): Promise<void> {
+  const token = getCookie(c, SESSION_COOKIE);
+  if (token) await c.var.deps.db`DELETE FROM sessions WHERE token_hash = ${hashToken(token)}`;
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
 }
 
 /** Creates a server-side session for the Person and sets the HttpOnly cookie. */
